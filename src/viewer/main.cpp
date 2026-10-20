@@ -73,6 +73,24 @@ public:
 
     void update(float dt) {
         if (game_) {
+            const bool* k = SDL_GetKeyboardState(nullptr);
+            using G = bt::Game;
+            std::uint16_t bits = 0;
+            if (k[SDL_SCANCODE_LEFT]) bits |= G::kLeft;
+            if (k[SDL_SCANCODE_RIGHT]) bits |= G::kRight;
+            if (k[SDL_SCANCODE_UP]) bits |= G::kUp;
+            if (k[SDL_SCANCODE_DOWN]) bits |= G::kDown;
+            if (k[SDL_SCANCODE_F]) bits |= G::kFire;
+            if (k[SDL_SCANCODE_R]) bits |= G::kShootBack;
+            if (k[SDL_SCANCODE_SPACE]) bits |= G::kJump;
+            if (k[SDL_SCANCODE_D]) bits |= G::kRun;
+            if (k[SDL_SCANCODE_S]) bits |= G::kGun;
+            if (k[SDL_SCANCODE_E]) bits |= G::kUseItem;
+            if (k[SDL_SCANCODE_LEFTBRACKET]) bits |= G::kItemPrev;
+            if (k[SDL_SCANCODE_RIGHTBRACKET]) bits |= G::kItemNext;
+            if (k[SDL_SCANCODE_RETURN]) bits |= G::kEnter;
+            bits |= scripted_input_;
+            game_->set_input(bits);
             tick_acc_ += dt;
             int steps = 0;
             while (tick_acc_ >= 1.0f / 30.0f && steps++ < 4) {
@@ -331,6 +349,9 @@ private:
     float tick_acc_ = 0;
     int ticks_ = 0;
     std::string play_error_;
+public:
+    std::uint16_t scripted_input_ = 0;  // for --hold in screenshot runs
+private:
     std::vector<bt::ActorType> actor_types_ = bt::load_actor_types(archive_);
     bt::Level level_;
     int level_index_ = 0;
@@ -353,6 +374,7 @@ int main(int argc, char** argv) {
     int start_level = 0, start_bank = 0;
     bool start_sprites = false, start_collision = false, start_objects = false, start_play = false;
     int start_ticks = 0;
+    std::uint16_t hold_bits = 0;
     float start_x = 0, start_y = 0;
     int start_zoom = 3;
     for (int i = 1; i < argc; ++i) {
@@ -363,6 +385,7 @@ int main(int argc, char** argv) {
         else if (a == "--collision") start_collision = true;
         else if (a == "--play") start_play = true;
         else if (a == "--ticks" && i + 1 < argc) start_ticks = std::atoi(argv[++i]);
+        else if (a == "--hold" && i + 1 < argc) hold_bits = static_cast<std::uint16_t>(std::strtol(argv[++i], nullptr, 16));
         else if (a == "--objects") start_objects = true;
         else if (a == "--zoom" && i + 1 < argc) start_zoom = std::clamp(std::atoi(argv[++i]), 1, 8);
         else if (a == "--x" && i + 1 < argc) start_x = static_cast<float>(std::atof(argv[++i]));
@@ -391,6 +414,7 @@ int main(int argc, char** argv) {
         Viewer viewer(renderer, *archive, data_path.parent_path() / "BTHORNE.EXE");
         viewer.open(start_level, start_sprites, start_bank, start_collision, start_objects, start_x, start_y, start_zoom);
         if (start_play) {
+            viewer.scripted_input_ = hold_bits;
             viewer.toggle_play();
             for (int t = 0; t < start_ticks; ++t) viewer.update(1.0f / 30.0f);
         }

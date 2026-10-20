@@ -20,6 +20,14 @@ public:
     // for the first level) with Kyle starting at (x, y).
     void load_level(int level_id, int x, int y);
 
+    // Input bits as the keyboard handler builds them (ds:2A82h).
+    enum Input : std::uint16_t {
+        kEnter = 0x1, kEscape = 0x2, kUp = 0x4, kDown = 0x8, kLeft = 0x10, kRight = 0x20,
+        kFire = 0x40, kShootBack = 0x80, kJump = 0x100, kRun = 0x200, kGun = 0x400,
+        kUseItem = 0x800, kItemPrev = 0x1000, kItemNext = 0x2000, kPause = 0x4000,
+    };
+    void set_input(std::uint16_t bits) { machine_->ds.set_u16(0x2A82, bits); }
+
     // One game tick (30 per second).
     void tick();
 

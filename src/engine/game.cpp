@@ -248,6 +248,14 @@ void Game::main_loop_actors() {
 }
 
 void Game::tick() {
+    // sub_10A80 / sub_10A93: latch the input word, newly pressed bits, accumulated presses.
+    DataSegment& d = machine_->ds;
+    const std::uint16_t now = d.u16(0x2A82);
+    d.set_u16(0x35A, now);
+    const std::uint16_t pressed = static_cast<std::uint16_t>((now ^ d.u16(0x360)) & now);
+    d.set_u16(0x35C, pressed);
+    d.set_u16(0x35E, static_cast<std::uint16_t>(d.u16(0x35E) | pressed));
+    d.set_u16(0x360, now);
     main_loop_actors();
     if (camera_needs_flip()) {  // sub_100B6
         place_camera();
