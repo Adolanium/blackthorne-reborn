@@ -58,6 +58,44 @@ resolution. `HdRenderer` (`src/render/hd.{h,cpp}`) draws them.
 Exports and packs come from the original art: keep them out of git (`out/`
 and `packs/` are git-ignored).
 
+### Repainting with an image model
+
+A whole layer is too large for an image model (C0's foreground is 7168x896
+at 4x), and a model won't return exact sizes or transparency.
+`tools/artpack.py` handles both:
+
+```
+python tools/artpack.py split  out/export out/work --levels C0
+# repaint every out/work/<ID>/<fg|bg>/in/<x>_<y>.png into .../out/<x>_<y>.png
+python tools/artpack.py stitch out/export out/work packs/<name>
+python tools/artpack.py check  out/export packs/<name>
+```
+
+- `split` cuts each layer into tiles of 256x224 game pixels (1024x896 at
+  4x), overlapping by 32 pixels. Transparent parts are filled with magenta
+  (`#ff00ff`). Fully transparent tiles are skipped.
+- `stitch` resizes each repainted tile to its exact size, cross-fades the
+  overlaps and takes the transparency from the original layer. So the
+  painting covers exactly what the original covered, and whatever the model
+  painted over the magenta is dropped. Tiles without a repaint keep the
+  original pixels, so you can repaint a level a few tiles at a time.
+- `nearest` writes the round-trip pack (the exports upscaled 4x with nearest
+  neighbour).
+
+What to ask of the model for each tile (with Codex, give it this and the
+level's `preview.png` for context):
+
+- Repaint the image as detailed, crisp, hand-painted dark-fantasy game art
+  at the same size.
+- Keep the composition exactly: every ledge, wall, ladder, door, pillar and
+  vine in the same place, with the same silhouette and the same overall
+  colours and brightness. Characters walk on these edges.
+- Add no new objects and remove none. No text, no characters.
+- The magenta areas are empty: paint them any way, they are cut out.
+- Neighbouring tiles overlap, so keep the style and lighting consistent
+  across a level: use the same instructions, and the previous tile as a
+  style reference where the model accepts one.
+
 ### Using a pack
 
 The game takes the pack from `pack=<folder>` in `settings.ini`, or else the
