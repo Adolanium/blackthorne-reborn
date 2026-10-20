@@ -5,6 +5,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -183,8 +184,26 @@ void fail(const std::string& message) {
 struct Settings {
     Filter filter = Filter::Sharp;
     bool wide = false;
+    std::string soundfont;  // empty: the first .sf2 in the settings folder or next to the game
     std::vector<Binding> bindings = default_bindings();
 };
+
+// The SoundFont for the music: the configured one, else the first .sf2 found
+// in the settings folder or the game's folder.
+std::filesystem::path find_soundfont(const Settings& s, const std::filesystem::path& settings_dir) {
+    if (!s.soundfont.empty()) return std::filesystem::path(s.soundfont);
+    const char* base = SDL_GetBasePath();
+    for (const std::filesystem::path& dir : {settings_dir, std::filesystem::path(base ? base : "")}) {
+        std::error_code ec;
+        if (dir.empty() || !std::filesystem::is_directory(dir, ec)) continue;
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            std::string ext = entry.path().extension().string();
+            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (ext == ".sf2") return entry.path();
+        }
+    }
+    return {};
+}
 
 Settings load_settings(const std::filesystem::path& path) {
     Settings s;
@@ -193,6 +212,8 @@ Settings load_settings(const std::filesystem::path& path) {
         if (line.rfind("filter=", 0) == 0) {
             const int f = std::atoi(line.c_str() + 7);
             if (f >= 0 && f < static_cast<int>(Filter::Count)) s.filter = static_cast<Filter>(f);
+        } else if (line.rfind("soundfont=", 0) == 0) {
+            s.soundfont = line.substr(10);
         } else if (line.rfind("widescreen=", 0) == 0) {
             s.wide = std::atoi(line.c_str() + 11) != 0;
         } else if (line.rfind("key.", 0) == 0 && line.find('=') != std::string::npos) {
@@ -216,7 +237,8 @@ Settings load_settings(const std::filesystem::path& path) {
 
 void save_settings(const std::filesystem::path& path, const Settings& s) {
     std::ofstream out(path);
-    out << "filter=" << static_cast<int>(s.filter) << "\nwidescreen=" << (s.wide ? 1 : 0) << '\n';
+    out << "filter=" << static_cast<int>(s.filter) << "\nwidescreen=" << (s.wide ? 1 : 0) << "\nsoundfont=" << s.soundfont
+        << '\n';
     for (const Binding& b : s.bindings) {
         out << "key." << b.name << '=';
         for (std::size_t i = 0; i < b.keys.size(); ++i) out << (i ? "," : "") << SDL_GetScancodeName(b.keys[i]);
@@ -275,10 +297,10 @@ int main(int argc, char** argv) {
                                      shot.empty() ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_HIDDEN, &window, &sdl))
         return 1;
     SDL_SetRenderVSync(sdl, 1);
-    audio.open();  // the game runs silently if there is no audio device
-    if (music.open()) audio.music = &music;
-    auto display = std::make_unique<Display>(sdl);
     Settings settings = load_settings(settings_path);
+    audio.open();  // the game runs silently if there is no audio device
+    if (music.open(find_soundfont(settings, settings_path.parent_path()))) audio.music = &music;
+    auto display = std::make_unique<Display>(sdl);
     if (filter_arg >= 0 && filter_arg < static_cast<int>(Filter::Count)) settings.filter = static_cast<Filter>(filter_arg);
     if (wide_arg >= 0) settings.wide = wide_arg != 0;
     display->filter = settings.filter;

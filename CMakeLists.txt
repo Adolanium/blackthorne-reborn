@@ -13,6 +13,12 @@ FetchContent_Declare(
     URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.16/SDL3-3.4.16.tar.gz
 )
 FetchContent_MakeAvailable(SDL3)
+# TinySoundFont (MIT, header-only) renders the music through a SoundFont.
+FetchContent_Declare(
+    tinysoundfont
+    URL https://github.com/schellingb/TinySoundFont/archive/853a0a171759f1ddba0de1442133a75912bbeffa.tar.gz
+)
+FetchContent_MakeAvailable(tinysoundfont)
 
 add_library(btdata STATIC
     src/data/actors.cpp
@@ -40,6 +46,7 @@ target_link_libraries(btrender PUBLIC btengine)
 
 add_library(btaudio STATIC src/audio/audio.cpp src/audio/music.cpp)
 target_link_libraries(btaudio PUBLIC btengine SDL3::SDL3-static)
+target_include_directories(btaudio PRIVATE ${tinysoundfont_SOURCE_DIR})
 if(WIN32)
     target_link_libraries(btaudio PUBLIC winmm)
 endif()
@@ -71,3 +78,6 @@ target_link_libraries(btsoak PRIVATE btengine)
 
 add_executable(btprobe tests/probe.cpp)
 target_link_libraries(btprobe PRIVATE btengine)
+
+add_executable(btmusicwav tests/musicwav.cpp)
+target_link_libraries(btmusicwav PRIVATE btaudio)
