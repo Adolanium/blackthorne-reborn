@@ -97,7 +97,8 @@ print_lock = threading.Lock()
 
 def log(msg):
     with print_lock:
-        print(time.strftime("%H:%M:%S"), msg, flush=True)
+        line = time.strftime("%H:%M:%S") + " " + msg
+        print(line.encode("ascii", "replace").decode("ascii"), flush=True)
 
 
 def coverage(img):
@@ -190,6 +191,14 @@ def run_job(job, args):
     return False
 
 
+def safe_job(job, args):
+    try:
+        return run_job(job, args)
+    except Exception as e:  # one bad job must not stop the run
+        log(f"FAILED {job[1]} {job[2]}: {e!r}")
+        return False
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("work")
@@ -208,7 +217,7 @@ def main():
     log(f"{len(jobs)} job(s) to do, {args.jobs} at a time")
     failed = 0
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        for ok in pool.map(lambda j: run_job(j, args), jobs):
+        for ok in pool.map(lambda j: safe_job(j, args), jobs):
             failed += not ok
     log(f"finished: {len(jobs) - failed} done, {failed} failed")
     sys.exit(1 if failed else 0)

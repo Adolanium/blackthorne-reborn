@@ -68,11 +68,12 @@ def layer_path(root, level, layer):
 
 
 def write_pack_json(pack, smooth_text=True):
-    """smooth_text rounds off the original font; the round-trip pack keeps
-    it off so it stays pixel-exact."""
+    """smooth_text rounds off the original font, and everything still drawn
+    from the original pixels; the round-trip pack keeps it off so it stays
+    pixel-exact."""
     os.makedirs(pack, exist_ok=True)
     with open(os.path.join(pack, "pack.json"), "w") as f:
-        json.dump({"scale": SCALE, "smooth_text": smooth_text}, f)
+        json.dump({"scale": SCALE, "smooth_text": smooth_text, "smooth_fallback": smooth_text}, f)
         f.write("\n")
 
 

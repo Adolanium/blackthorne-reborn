@@ -382,6 +382,8 @@ static const std::array<std::uint8_t, 768> kIndexPalette = [] {
     return p;
 }();
 
+std::uint32_t Renderer::index_pixel(int index) { return colour(kIndexPalette.data(), index); }
+
 int Renderer::layer_index(std::uint32_t pixel) {
     if (!(pixel >> 24)) return -1;
     const int r = static_cast<int>(((pixel >> 16) & 0xFF) * 63 + 127) / 255, g = static_cast<int>(((pixel >> 8) & 0xFF) * 63 + 127) / 255;

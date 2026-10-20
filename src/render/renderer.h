@@ -79,6 +79,7 @@ public:
     };
     void render_layers(const Scene& scene, const RenderOptions& opt, Layers& out) const;
     static int layer_index(std::uint32_t pixel);  // -1 if transparent
+    static std::uint32_t index_pixel(int index);  // the encoding layer_index() reads
 
     // A sprite part as the original draws it: its square's top left in map
     // coordinates, size, horizontal mirroring, colour base and pixel data

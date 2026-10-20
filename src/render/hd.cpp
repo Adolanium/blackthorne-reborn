@@ -46,8 +46,12 @@ ArtPack::ArtPack(std::filesystem::path dir) : dir_(std::move(dir)) {
         const std::size_t colon = json.find(':', at);
         if (colon != std::string::npos) scale_ = std::clamp(std::atoi(json.c_str() + colon + 1), 1, 8);
     }
-    const std::size_t smooth = json.find("\"smooth_text\"");
-    smooth_text_ = smooth != std::string::npos && json.find("true", smooth) < json.find_first_of(",}", smooth);
+    auto flag = [&](const char* name) {
+        const std::size_t at = json.find(name);
+        return at != std::string::npos && json.find("true", at) < json.find_first_of(",}", at);
+    };
+    smooth_text_ = flag("\"smooth_text\"");
+    smooth_fallback_ = flag("\"smooth_fallback\"");
     std::error_code ec;
     has_sprites_ = std::filesystem::is_directory(dir_ / "sprites", ec);
     std::ifstream pal(dir_ / "hud" / "hud.pal", std::ios::binary);
@@ -202,6 +206,28 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
         const int cell = (y >> 3) * 32 + (sx >> 3);
         return !m.repainted[static_cast<std::size_t>(cell)] || (captions && ds.u16(static_cast<std::uint16_t>(0x2D08 + cell * 2)) != 0x20);
     };
+    // smooth_fallback: the original layers rounded off with Scale2x twice,
+    // for everything that keeps the original pixels.
+    const bool smooth = pack_ && pack_->smooth_fallback() && S == 4;
+    if (smooth) {
+        const Image* sources[4] = {&layers.background_back, &layers.background_front, &layers.foreground_back, &layers.foreground_front};
+        for (int k = 0; k < 4; ++k) {
+            scale2x(*sources[k], smooth2_);
+            scale2x(smooth2_, smooth4_[k]);
+        }
+    }
+    // The original pixel (x, y) of a layer: a block, or its rounded-off version.
+    auto original_pixel = [&](int x, int y, int index, const Image* smooth4) {
+        if (!smooth4) {
+            if (index >= 0) block(x, y, pal_colour(scene.palette, index));
+            return;
+        }
+        for (int yy = 0; yy < S; ++yy)
+            for (int xx = 0; xx < S; ++xx) {
+                const int v = Renderer::layer_index(smooth4->pixels[static_cast<std::size_t>(y * S + yy) * smooth4->width + x * S + xx]);
+                if (v >= 0) play.pixels[static_cast<std::size_t>(y * S + yy) * play.width + x * S + xx] = pal_colour(scene.palette, v);
+            }
+    };
     // A map layer pass: back (bit 3 clear) or front tiles of the background or
     // the foreground. In full-redraw cells the background's back pass draws
     // its front tiles too.
@@ -212,6 +238,8 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
         const Image* paint = background ? bg_paint : fg_paint;
         const int ox = background ? layers.bg_x : layers.view_x, oy = background ? layers.bg_y : layers.cam_y;
         const int lw = background ? bg_w : fg_w, lh = background ? bg_h : fg_h;
+        const Image* own4 = smooth ? &smooth4_[(background ? 0 : 2) + (front ? 1 : 0)] : nullptr;
+        const Image* front4 = smooth ? &smooth4_[background ? 1 : 3] : nullptr;
         // changed() for the cells in view, worked out once.
         const int cx0 = ox >> 4, cy0 = oy >> 4, cw = ((ox + W - 1) >> 4) - cx0 + 1, ch = ((oy + H - 1) >> 4) - cy0 + 1;
         cells_.assign(static_cast<std::size_t>(cw) * ch, 0);
@@ -231,8 +259,8 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                 const int front_idx = Renderer::layer_index(front_1x.pixels[i1]);
                 if (!paint || original || (idx >= 0 && unfollowable[static_cast<std::size_t>(idx)]) ||
                     (merged && front_idx >= 0 && unfollowable[static_cast<std::size_t>(front_idx)])) {
-                    if (idx >= 0) block(x, y, pal_colour(scene.palette, idx));
-                    if (merged && front_idx >= 0) block(x, y, pal_colour(scene.palette, front_idx));
+                    original_pixel(x, y, idx, own4);
+                    if (merged) original_pixel(x, y, front_idx, front4);
                     continue;
                 }
                 // The painting decides the shape; the original decides whether
@@ -271,6 +299,30 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
             const int px = part.x - layers.view_x, py = part.y - layers.cam_y, size = part.size;
             if (px >= W || py >= H || px + size <= 0 || py + size <= 0) continue;
             const ArtPack::Sprite* rep = pack_ ? pack_->sprite(Renderer::part_key(part), size) : nullptr;
+            // smooth_fallback: the part rounded off, made when first needed.
+            bool rounded = false;
+            auto original_part_pixel = [&](int x, int y, int sx, int sy, int v) {
+                if (!smooth) {
+                    block(sx, sy, pal_colour(scene.palette, v));
+                    return;
+                }
+                if (!rounded) {
+                    part1_.resize(size, size);
+                    for (int yy = 0; yy < size; ++yy)
+                        for (int xx = 0; xx < size; ++xx) {
+                            const int c = Renderer::part_pixel(part, xx, yy);
+                            part1_.pixels[static_cast<std::size_t>(yy) * size + xx] = c < 0 ? 0u : Renderer::index_pixel(c);
+                        }
+                    scale2x(part1_, part2_);
+                    scale2x(part2_, part4_);
+                    rounded = true;
+                }
+                for (int yy = 0; yy < S; ++yy)
+                    for (int xx = 0; xx < S; ++xx) {
+                        const int c = Renderer::layer_index(part4_.pixels[static_cast<std::size_t>(y * S + yy) * part4_.width + x * S + xx]);
+                        if (c >= 0) play.pixels[static_cast<std::size_t>(sy * S + yy) * play.width + sx * S + xx] = pal_colour(scene.palette, c);
+                    }
+            };
             for (int y = std::max(0, -py); y < size && py + y < H; ++y)
                 for (int x = std::max(0, -px); x < size && px + x < W; ++x) {
                     const int sx = px + x, sy = py + y;
@@ -290,7 +342,7 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                         }
                     }
                     if (!follow) {
-                        block(sx, sy, pal_colour(scene.palette, v));
+                        original_part_pixel(x, y, sx, sy, v);
                         continue;
                     }
                     // The replacement is drawn the way the part's data is stored:

@@ -130,6 +130,11 @@ where map pixels come from:
   black. These are upscaled from the original instead.
 - **Everything else** (sprites without a replacement, text, HUD) is the
   original, upscaled. Sprite replacements are described below.
+- **Smoothing.** Packs made by `stitch` set `smooth_text` and
+  `smooth_fallback` in `pack.json`. Text, and everything that keeps the
+  original pixels (cycled colours, animated tiles, changed cells, sprites
+  without a replacement), is then rounded off with Scale2x twice instead of
+  drawn as 4x blocks. The round-trip pack leaves both off.
 
 A pack of the exports upscaled 4x with nearest neighbour must give exactly
 the classic picture upscaled 4x. That is the round-trip check for
