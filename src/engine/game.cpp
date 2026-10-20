@@ -155,6 +155,13 @@ void Game::load_level_data(int level_id, int x, int y) {
     const std::uint16_t kyle_param = ds.field(0x1552, 0);
     const std::uint16_t kyle_flags = static_cast<std::uint16_t>(ds.field(field::kFlags, 0) & 0xFF);
     for (std::uint16_t a : kResetGlobals) ds.set_u16(a, 0);
+    // sub_10F6D: every level starts the random generator (sub_10C9F) from
+    // the same seed, and stops any macro (demo) recording or playback.
+    for (std::uint16_t a = 0x4E; a < 0x58; a = static_cast<std::uint16_t>(a + 2)) ds.set_u16(a, 0x481E);
+    ds.set_u16(0x58, 0x260A);
+    ds.set_u16(0x306, 0);
+    ds.set_u16(0x308, 0);
+    ds.set_u16(0x304, 0);
     ds.set_u16(0x1C8A, 0x1000);  // velocity limits
     ds.set_u16(0x1C8C, 0x1000);
     ds.set_u16(0x326, 0xFFFF);
@@ -588,6 +595,13 @@ void Game::frame_tail() {
     update_shake();
     animate_tiles();
     track_redraws();
+    // sub_142D4 / sub_1423E: the HUD drawer counts down the per-page redraw
+    // bits of the 8 inventory slots and of the item name.
+    if (ds.u16(0x1CF6) & 1) {
+        for (std::uint16_t di = 0; di < 0x10; di = static_cast<std::uint16_t>(di + 2))
+            ds.set_u16(static_cast<std::uint16_t>(0x60A6 + di), static_cast<std::uint16_t>(ds.u16(static_cast<std::uint16_t>(0x60A6 + di)) >> 1));
+        ds.set_u16(0x1CC2, static_cast<std::uint16_t>(ds.u16(0x1CC2) >> 1));
+    }
     page_flip();
 }
 
@@ -882,7 +896,7 @@ void Game::cycle_palettes() {
             ds.set_u8(c, static_cast<std::uint8_t>((v << 1) & 0x3E));
             ds.set_u8(static_cast<std::uint16_t>(c + 2), static_cast<std::uint8_t>((v >> 9) & 0x3E));
             ds.set_u8(static_cast<std::uint16_t>(c + 1), static_cast<std::uint8_t>((v >> 4) & 0x3E));
-            vm_->retint_range(c, 1);
+            vm_->retint_range(static_cast<std::uint16_t>(last * 3), 1);  // sub_12671 for this one colour (byte offset)
         }
         ds.set_u16(static_cast<std::uint16_t>(0x1BA8 + si), ds.u16(static_cast<std::uint16_t>(0x1B98 + si)));
     }

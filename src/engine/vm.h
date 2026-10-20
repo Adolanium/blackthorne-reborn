@@ -92,7 +92,8 @@ public:
     void show_text_block(std::uint16_t addr);
     void clear_text() { op_clear_text(); }                       // sub_15F4A
     void apply_password() { op_apply_password(); }               // sub_10B92
-    void retint_range(std::uint16_t start, int colours) { retint_palette(start, colours); }  // sub_12671
+    // sub_12671: `start` is a byte offset into the palette (colour * 3).
+    void retint_range(std::uint16_t start, int colours) { retint_palette(start, colours); }
     bool alloc_frame_buffer(std::uint16_t bank, std::uint16_t& seg, std::uint16_t& off);  // sub_11F9E
     void run_scheduler(bool offscreen_only = false);             // sub_1601A (or sub_15FF1) + sub_15FCE
     void integrate_velocity();                                   // sub_111BC
