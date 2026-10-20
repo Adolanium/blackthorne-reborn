@@ -1,6 +1,7 @@
 #include "engine/game.h"
 
 #include <algorithm>
+#include <array>
 #include <fstream>
 #include <stdexcept>
 
@@ -793,7 +794,8 @@ void Game::fade(bool in) {
     DataSegment& ds = machine_->ds;
     ++nesting_;
     if (!in) ds.set_u16(0x326, 0xFFFF);
-    for (int bx : in ? std::initializer_list<int>{0x46, 0} : std::initializer_list<int>{0, 0x46}) {
+    const std::array<int, 2> steps = in ? std::array<int, 2>{0x46, 0} : std::array<int, 2>{0, 0x46};
+    for (int bx : steps) {
         for (int k = 0; k < 3; ++k) ds.set_u16(static_cast<std::uint16_t>(0x320 + 2 * k), static_cast<std::uint16_t>(bx));
         retint();
         ds.set_u16(0x4A10, 2);

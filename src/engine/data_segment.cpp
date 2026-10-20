@@ -1,5 +1,6 @@
 #include "engine/data_segment.h"
 
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
