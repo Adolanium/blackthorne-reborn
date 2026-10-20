@@ -14,6 +14,12 @@ An image model can't take a whole level layer (C0's foreground is 1792x224,
   nearest  a pack of the exports upscaled 4x with nearest neighbour: the
            round-trip check for HdRenderer
   check    check a pack against the export: sizes, coverage
+  collect  play every level headless with random input and save the sprite
+           parts shown to <export>/sprites (blackthorne --parts)
+  split-sprites / stitch-sprites
+           the same for sprite parts: sheets of parts of one size for the
+           model, cut back into the pack's sprites/<key>.png with the
+           part's palette (<key>.pal)
 
 Exports, work folders and packs come from the original art: keep them in
 git-ignored folders (out/, packs/).
@@ -22,6 +28,9 @@ git-ignored folders (out/, packs/).
   python tools/artpack.py stitch  out/export out/work packs/<name>
   python tools/artpack.py nearest out/export packs/<name> [--levels ...]
   python tools/artpack.py check   out/export packs/<name>
+  python tools/artpack.py collect <blackthorne.exe> <DATA.DAT> out/export [--runs 3] [--frames 3000]
+  python tools/artpack.py split-sprites  out/export out/work
+  python tools/artpack.py stitch-sprites out/export out/work packs/<name>
 
 Work folder layout (one folder per level and layer):
   <work>/<ID>/<fg|bg>/in/<x>_<y>.png   the model's input (4x, key colour where transparent)
@@ -33,6 +42,9 @@ Work folder layout (one folder per level and layer):
 import argparse
 import json
 import os
+import random
+import shutil
+import subprocess
 import sys
 
 import numpy as np
@@ -135,6 +147,13 @@ def feather(w, h, rect, layer_w, layer_h, overlap):
     return col, row
 
 
+def smooth_alpha(alpha, size):
+    """The 1x transparency upscaled smoothly and sharpened back to a clean
+    edge about a game pixel wide."""
+    a = np.asarray(alpha.resize(size, Image.BILINEAR), dtype=np.float64) / 255.0
+    return np.clip((a - 0.5) * 2.5 + 0.5, 0.0, 1.0) * 255.0
+
+
 def defringe(rgb, passes=12):
     """Models blend edges into the magenta key. Pixels with a magenta cast
     are refilled from their clean neighbours, growing inwards."""
@@ -190,7 +209,12 @@ def cmd_stitch(args):
             if not repainted:
                 continue
             out = up.copy()
-            painted = (weight > 0) & (up[:, :, 3] > 0)
+            if args.edges == "smooth":
+                # Repainted parts get smooth outlines: the original's shape
+                # within a fraction of a game pixel.
+                alpha = smooth_alpha(original.getchannel("A"), (W, H))
+                out[weight > 0, 3] = alpha[weight > 0]
+            painted = (weight > 0) & (out[:, :, 3] > 0)
             out[painted, :3] = colour[painted] / weight[painted][:, None]
             dst = layer_path(args.pack, level, layer)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -211,7 +235,123 @@ def cmd_nearest(args):
             dst = layer_path(args.pack, level, layer)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST).save(dst)
+    sprites = os.path.join(args.export, "sprites")
+    if os.path.isdir(sprites) and not args.levels:
+        out = os.path.join(args.pack, "sprites")
+        os.makedirs(out, exist_ok=True)
+        for name in os.listdir(sprites):
+            if name.endswith(".png"):
+                img = Image.open(os.path.join(sprites, name))
+                img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST).save(os.path.join(out, name))
+            elif name.endswith(".pal"):
+                shutil.copy(os.path.join(sprites, name), out)
     print(f"round-trip pack written to {args.pack}")
+
+
+# Sprites -------------------------------------------------------------------
+
+def random_input(seed, frames):
+    """Scripted play like tools/playtest.py: random moves, jumps, shots."""
+    r = random.Random(seed)
+    moves = [0x20, 0x10, 0x220, 0x210, 0x100, 0x120, 0x110, 0x8, 0x4, 0, 0x40, 0x80, 0x400, 0x800, 0x1000, 0x2000, 0x60, 0x50]
+    spec, t = [], 60
+    while t < frames:
+        n = r.randint(3, 40)
+        bits = r.choice(moves)
+        if bits:
+            spec.append("%d-%d:%x" % (t, t + n - 1, bits))
+        t += n + r.randint(0, 6)
+    return ",".join(spec)
+
+
+def cmd_collect(args):
+    """Plays every exported level headless with random input and saves the
+    sprite parts shown to <export>/sprites (blackthorne --parts)."""
+    out = os.path.join(args.export, "sprites")
+    tmp = os.path.join(args.export, "collect.bmp")
+    for level in level_ids(args.export, args.levels):
+        for run in range(args.runs):
+            cmd = [args.exe, args.data, "--level", level, "--ticks", str(args.frames), "--size", "320x240", "--shot", tmp,
+                   "--pack", os.path.join(args.export, "no-pack"), "--parts", out,
+                   "--input", random_input(int(level, 16) * 100 + run, args.frames)]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode:
+                print(f"{level} run {run}: exit {r.returncode} {r.stderr.strip()[:200]}")
+        count = sum(1 for n in os.listdir(out) if n.endswith(".png")) if os.path.isdir(out) else 0
+        print(f"{level}: {count} parts so far")
+    if os.path.exists(tmp):
+        os.remove(tmp)
+
+
+SHEET = 256  # sprite sheet width at 1x (1024 at 4x)
+GAP = 8      # magenta between sprites at 1x
+
+
+def cmd_split_sprites(args):
+    """Puts the collected parts on sheets for the model, by size: each sheet
+    is at most 256x224 game pixels (1024x896 at 4x)."""
+    src = os.path.join(args.export, "sprites")
+    names = sorted(n[:-4] for n in os.listdir(src) if n.endswith(".png"))
+    by_size = {}
+    for key in names:
+        by_size.setdefault(Image.open(os.path.join(src, key + ".png")).width, []).append(key)
+    base = os.path.join(args.work, "sprites")
+    os.makedirs(os.path.join(base, "in"), exist_ok=True)
+    os.makedirs(os.path.join(base, "out"), exist_ok=True)
+    sheets = []
+    for size, keys in sorted(by_size.items()):
+        pitch = size + GAP
+        cols, rows = max(1, (SHEET - GAP) // pitch), max(1, (224 - GAP) // pitch)
+        for first in range(0, len(keys), cols * rows):
+            batch = keys[first:first + cols * rows]
+            used_rows = (len(batch) + cols - 1) // cols
+            w, h = GAP + cols * pitch, GAP + used_rows * pitch
+            sheet = Image.new("RGB", (w * SCALE, h * SCALE), KEY)
+            cells = []
+            for i, key in enumerate(batch):
+                x, y = GAP + (i % cols) * pitch, GAP + (i // cols) * pitch
+                part = Image.open(os.path.join(src, key + ".png")).convert("RGBA")
+                part = part.resize((size * SCALE, size * SCALE), Image.NEAREST)
+                sheet.paste(part, (x * SCALE, y * SCALE), mask=part.getchannel("A"))
+                cells.append({"key": key, "x": x, "y": y, "size": size})
+            name = f"s{size}_{first // (cols * rows)}.png"
+            sheet.save(os.path.join(base, "in", name))
+            sheets.append({"name": name, "width": w, "height": h, "cells": cells})
+    with open(os.path.join(base, "manifest.json"), "w") as f:
+        json.dump({"scale": SCALE, "key": "#%02x%02x%02x" % KEY, "sheets": sheets}, f, indent=1)
+    print(f"{len(names)} parts on {len(sheets)} sheets in {base}")
+
+
+def cmd_stitch_sprites(args):
+    """Cuts repainted sheets back into the pack's sprites/<key>.png, inside
+    each part's original shape, with its palette (<key>.pal)."""
+    src = os.path.join(args.export, "sprites")
+    base = os.path.join(args.work, "sprites")
+    with open(os.path.join(base, "manifest.json")) as f:
+        m = json.load(f)
+    out = os.path.join(args.pack, "sprites")
+    os.makedirs(out, exist_ok=True)
+    write_pack_json(args.pack)
+    done = 0
+    for sheet in m["sheets"]:
+        path = os.path.join(base, "out", sheet["name"])
+        if not os.path.exists(path):
+            continue
+        rgb = defringe(np.asarray(Image.open(path).convert("RGB").resize((sheet["width"] * SCALE, sheet["height"] * SCALE), Image.LANCZOS),
+                                  dtype=np.float64))
+        for c in sheet["cells"]:
+            s = c["size"] * SCALE
+            cell = rgb[c["y"] * SCALE:c["y"] * SCALE + s, c["x"] * SCALE:c["x"] * SCALE + s]
+            original = Image.open(os.path.join(src, c["key"] + ".png")).convert("RGBA").getchannel("A")
+            if args.edges == "smooth":
+                alpha = np.rint(smooth_alpha(original, (s, s))).astype(np.uint8)
+            else:
+                alpha = np.asarray(original.resize((s, s), Image.NEAREST))
+            rgba = np.dstack([np.rint(cell).clip(0, 255).astype(np.uint8), alpha])
+            Image.fromarray(rgba, "RGBA").save(os.path.join(out, c["key"] + ".png"))
+            shutil.copy(os.path.join(src, c["key"] + ".pal"), out)
+            done += 1
+    print(f"{done} sprite(s) written to {out}")
 
 
 def cmd_check(args):
@@ -254,6 +394,8 @@ def main():
     s.add_argument("work")
     s.add_argument("pack")
     s.add_argument("--overlap", type=int, default=32, help="the overlap split used, at 1x")
+    s.add_argument("--edges", choices=("smooth", "hard"), default="smooth",
+                   help="outlines: smooth, or hard (the 1x shape in 4x blocks)")
     s.set_defaults(func=cmd_stitch)
     s = sub.add_parser("nearest")
     s.add_argument("export")
@@ -264,6 +406,24 @@ def main():
     s.add_argument("export")
     s.add_argument("pack")
     s.set_defaults(func=cmd_check)
+    s = sub.add_parser("collect")
+    s.add_argument("exe", help="blackthorne executable")
+    s.add_argument("data", help="DATA.DAT")
+    s.add_argument("export")
+    s.add_argument("--levels")
+    s.add_argument("--runs", type=int, default=3, help="random play-throughs per level")
+    s.add_argument("--frames", type=int, default=3000)
+    s.set_defaults(func=cmd_collect)
+    s = sub.add_parser("split-sprites")
+    s.add_argument("export")
+    s.add_argument("work")
+    s.set_defaults(func=cmd_split_sprites)
+    s = sub.add_parser("stitch-sprites")
+    s.add_argument("export")
+    s.add_argument("work")
+    s.add_argument("pack")
+    s.add_argument("--edges", choices=("smooth", "hard"), default="smooth")
+    s.set_defaults(func=cmd_stitch_sprites)
     args = p.parse_args()
     args.func(args)
 

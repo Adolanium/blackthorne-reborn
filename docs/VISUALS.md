@@ -76,8 +76,11 @@ python tools/artpack.py check  out/export packs/<name>
   (`#ff00ff`). Fully transparent tiles are skipped.
 - `stitch` resizes each repainted tile to its exact size, cross-fades the
   overlaps and takes the transparency from the original layer. So the
-  painting covers exactly what the original covered, and whatever the model
-  painted over the magenta is dropped. Tiles without a repaint keep the
+  painting covers what the original covered, and whatever the model painted
+  over the magenta is dropped. Outlines are smoothed to within a fraction of
+  a game pixel of the original's (`--edges hard` keeps the 1x shape exactly),
+  and magenta the model blended into edges is painted over from neighbouring
+  pixels. Tiles without a repaint keep the
   original pixels, so you can repaint a level a few tiles at a time.
 - `nearest` writes the round-trip pack (the exports upscaled 4x with nearest
   neighbour).
@@ -123,7 +126,8 @@ where map pixels come from:
   load (doors, bridges), tiles that tile animations rewrote, colours in
   palette cycles (waterfalls, torches), and palette entries that grew out of
   black. These are upscaled from the original instead.
-- **Everything else** (sprites, text, HUD) is the original, upscaled.
+- **Everything else** (sprites without a replacement, text, HUD) is the
+  original, upscaled. Sprite replacements are described below.
 
 A pack of the exports upscaled 4x with nearest neighbour must give exactly
 the classic picture upscaled 4x. That is the round-trip check for
@@ -133,17 +137,38 @@ The game keeps the load-time map, tiles and palette in `Machine`
 (`map_at_load`, `tiles_at_load`, `tile_masks_at_load`, `palette_at_load`),
 and save states store them.
 
-## Next: sprites
+## Sprites
 
-- **Key replacements by content.** Key each sprite frame by a hash of its
-  original pixels and size, plus the colour base. Then a replacement follows
-  the artwork wherever the game uses it. Fall back to the original pixels
-  when no replacement exists.
-- **Positions stay the same.** Sprites are positioned from the same part
-  x/y, so motion stays identical.
-- **Getting the originals.** `btviewer` and `tools/sprites.py` can dump the
-  original sprite frames. Keep the dumps in `extracted/` or `out/`
-  (git-ignored).
+Characters, enemies and effects are sprite parts: squares of 8 to 64
+pixels. A pack replaces them one part at a time.
+
+- **Key.** A part is keyed by a hash of its pixel data and colour base
+  (`Renderer::part_key`). So a replacement follows the artwork wherever the
+  game uses it, mirrored or not, in any level.
+- **Files.** `<pack>/sprites/<key>.png` is the part at 4x, stored the way
+  the data is (not mirrored). `<key>.pal` is the palette it was painted
+  against.
+- **Drawing.** The replacement is drawn inside the part's original shape.
+  Each pixel is tinted by how its colour changed against `<key>.pal`, so
+  fades, flashes and palette variants still work. Cycled colours keep the
+  original pixels. Positions, priorities and order are the original's.
+- **Collecting the parts.** The game only builds sprite frames while it
+  plays, so they are collected by playing:
+
+  ```
+  python tools/artpack.py collect build/Release/blackthorne.exe "<Blackthorne>/BTHORNE/DATA.DAT" out/export
+  python tools/artpack.py split-sprites  out/export out/work
+  # repaint out/work/sprites/in/*.png into out/work/sprites/out/
+  python tools/artpack.py stitch-sprites out/export out/work packs/<name>
+  ```
+
+  `collect` plays each level headless with random input
+  (`blackthorne --parts`), and saves each part shown outside fades.
+  `split-sprites` puts parts of one size on magenta sheets. Parts the
+  random play never showed keep the original pixels.
+- **Limits.** Some characters are built from several parts (a body and a
+  head). Each part is repainted on its own, so keep the style consistent
+  across a sheet.
 
 ## Checking nothing broke
 
@@ -158,3 +183,5 @@ and save states store them.
   `blackthorne --level <id> --ticks <n> --shot x.bmp --frame hd.png --pack <pack>`
   must equal the classic frame (`--pack` pointing to a folder without a
   pack) upscaled 4x with nearest neighbour, in normal and widescreen.
+  `artpack.py nearest` includes the collected sprites, so the check covers
+  sprite replacement too.
