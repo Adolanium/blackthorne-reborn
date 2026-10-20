@@ -26,6 +26,13 @@ struct Machine {
     static constexpr std::uint16_t kDataSeg = 0x7000;    // "ds" itself (HUD icons live in the data segment)
     std::array<std::uint8_t, 0x10000> frames{};
     std::array<std::uint8_t, 0x10000> statics{};
+    // Tileset (ds:2596h: 64 planar bytes per 8x8 tile), its masks (ds:2598h:
+    // 8 bytes per tile) and tile animation frames (ds:2594h). Tile animations
+    // rewrite tiles in place, so the renderer reads tiles from here.
+    std::array<std::uint8_t, 0x10000> tiles{};
+    std::array<std::uint8_t, 0x2000> tile_masks{};
+    std::array<std::uint8_t, 0x10000> tile_anims{};
+
     // Sprite banks by slot (the byte index into ds:1152h divided by 2), raw
     // frames as stored in DATA.DAT; the game keeps these in EMS.
     std::vector<Bytes> banks = std::vector<Bytes>(16);

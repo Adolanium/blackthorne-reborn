@@ -61,6 +61,9 @@ private:
     void music_action();           // sub_11C64: the header's music action
     void hud_init();               // sub_140DC + sub_1407B
     void hud_tick();               // sub_1411C (inventory cycling) + sub_14164 (health, inventory state)
+    void cycle_palettes();         // sub_186C4
+    void update_shake();           // sub_10AC1
+    void animate_tiles();          // sub_18822
 
     const Archive& archive_;
     std::unique_ptr<Machine> machine_;

@@ -86,6 +86,8 @@ public:
     void anim_tick(int slot);                                    // sub_1207C
     void physics(int slot);                                      // loc_12404
     void schedule_actor(int slot);                               // sub_1603F
+    std::uint16_t random() { return rand16(); }                  // sub_10C9F
+    void retint_range(std::uint16_t start, int colours) { retint_palette(start, colours); }  // sub_12671
     bool alloc_frame_buffer(std::uint16_t bank, std::uint16_t& seg, std::uint16_t& off);  // sub_11F9E
     void run_scheduler();                                        // sub_1601A + sub_15FCE
     void integrate_velocity();                                   // sub_111BC

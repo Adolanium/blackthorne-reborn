@@ -89,6 +89,17 @@ void Game::load_level(int level_id, int x, int y) {
     if (has_background_) ds.set_u16(0x25B2, put(ds.u16(kDescriptor + 0x2C)));
     ds.set_u16(Machine::kMetatileTable, put(ds.u16(kDescriptor + 0x25)));
 
+    // sub_106B5: the tileset and its masks.
+    machine_->tiles.fill(0);
+    machine_->tile_masks.fill(0);
+    machine_->tile_anims.fill(0);
+    {
+        const Bytes t = archive_.resource(ds.u16(kDescriptor + 0x23));
+        std::copy_n(t.begin(), std::min(t.size(), machine_->tiles.size()), machine_->tiles.begin());
+        const Bytes m = archive_.resource(ds.u16(kDescriptor + 0x23) + 1);
+        std::copy_n(m.begin(), std::min(m.size(), machine_->tile_masks.size()), machine_->tile_masks.begin());
+    }
+
     walk_descriptor();
 
     // sub_10A48: part sizes for this level.
@@ -202,11 +213,23 @@ void Game::walk_descriptor() {
     }
     o = static_cast<std::uint16_t>(o + 1);
 
-    // sub_10802: background objects (not loaded yet; their graphics go to a
-    // separate segment the renderer will use later).
+    // sub_10802: tile animations. Each record: flags (bit 7 = random delay),
+    // frame count, current frame, first tile, tile count * 32, frames resource.
     ds.set_u16(0x1BE8, u16(o));
     o = static_cast<std::uint16_t>(o + 2);
-    while (ds.u8(o) != 0) o = static_cast<std::uint16_t>(o + 8);
+    for (std::uint16_t si = 0, at_anim = 0; ds.u8(o) != 0; si = static_cast<std::uint16_t>(si + 2), o = static_cast<std::uint16_t>(o + 8)) {
+        std::uint16_t fl = ds.u8(o);
+        if (fl & 0x80) fl = static_cast<std::uint16_t>((fl & 0xFF7F) | 0x8000);
+        ds.set_u16(static_cast<std::uint16_t>(0x1BEA + si), fl);
+        ds.set_u16(static_cast<std::uint16_t>(0x1BFA + si), 1);
+        ds.set_u16(static_cast<std::uint16_t>(0x1C0A + si), ds.u8(static_cast<std::uint16_t>(o + 1)));
+        ds.set_u16(static_cast<std::uint16_t>(0x1C1A + si), ds.u8(static_cast<std::uint16_t>(o + 2)));
+        ds.set_u16(static_cast<std::uint16_t>(0x1C2A + si), static_cast<std::uint16_t>(ds.u8(static_cast<std::uint16_t>(o + 3)) << 6));
+        ds.set_u16(static_cast<std::uint16_t>(0x1C3A + si), static_cast<std::uint16_t>(u16(static_cast<std::uint16_t>(o + 4)) >> 5));
+        ds.set_u16(static_cast<std::uint16_t>(0x1C4A + si), at_anim);
+        ds.set_u16(static_cast<std::uint16_t>(0x1C5A + si), 0);
+        for (std::uint8_t b : archive_.resource(u16(static_cast<std::uint16_t>(o + 6)))) machine_->tile_anims[at_anim++] = b;
+    }
     o = static_cast<std::uint16_t>(o + 1);
 
     // sub_10876: single-frame sprites preloaded into the static segment.
@@ -414,7 +437,102 @@ void Game::tick() {
         main_loop_actors();
     }
     hud_tick();  // sub_1411C, sub_14164 close the main loop
+    // The main loop falls through into the frame routine sub_1008C.
+    cycle_palettes();
+    update_shake();
+    animate_tiles();
     if (machine_->ds.u16(0x318) & 1) change_level();
+}
+
+// sub_186C4: palette cycles enabled in the mask ds:1B86h. A range rotates one
+// colour per step (direction by its ends); a single colour steps through a
+// list of 5:5:5 values.
+void Game::cycle_palettes() {
+    DataSegment& ds = machine_->ds;
+    auto rgb = [&](std::uint16_t base, int c) { return static_cast<std::uint16_t>(base + c * 3); };
+    auto move3 = [&](std::uint16_t dst, std::uint16_t src) {
+        for (int k = 0; k < 3; ++k) ds.set_u8(static_cast<std::uint16_t>(dst + k), ds.u8(static_cast<std::uint16_t>(src + k)));
+    };
+    for (int si = 0xE; si >= 0; si -= 2) {
+        if (!(ds.u16(0x1B86) & ds.u16(static_cast<std::uint16_t>(0x288A + si)))) continue;
+        const std::uint16_t cnt = static_cast<std::uint16_t>(ds.u16(static_cast<std::uint16_t>(0x1BA8 + si)) - 1);
+        ds.set_u16(static_cast<std::uint16_t>(0x1BA8 + si), cnt);
+        if (cnt != 0) continue;
+        const int first = ds.u16(static_cast<std::uint16_t>(0x1BB8 + si)), last = ds.u16(static_cast<std::uint16_t>(0x1BC8 + si));
+        if (last > first) {  // sub_18703: rotate the range up by one colour
+            for (std::uint16_t base : {std::uint16_t{0x4A12}, std::uint16_t{0x4D12}}) {
+                std::uint8_t keep[3];
+                for (int k = 0; k < 3; ++k) keep[k] = ds.u8(static_cast<std::uint16_t>(rgb(base, last) + k));
+                for (int c = last; c > first; --c) move3(rgb(base, c), rgb(base, c - 1));
+                for (int k = 0; k < 3; ++k) ds.set_u8(static_cast<std::uint16_t>(rgb(base, first) + k), keep[k]);
+            }
+        } else if (last < first) {  // sub_18758: rotate down
+            for (std::uint16_t base : {std::uint16_t{0x4A12}, std::uint16_t{0x4D12}}) {
+                std::uint8_t keep[3];
+                for (int k = 0; k < 3; ++k) keep[k] = ds.u8(static_cast<std::uint16_t>(rgb(base, last) + k));
+                for (int c = last; c < first; ++c) move3(rgb(base, c), rgb(base, c + 1));
+                for (int k = 0; k < 3; ++k) ds.set_u8(static_cast<std::uint16_t>(rgb(base, first) + k), keep[k]);
+            }
+        } else {  // sub_187AD: rotate the colour through its list, as 5:5:5
+            const std::uint16_t c = rgb(0x4A12, last);
+            std::uint16_t v = static_cast<std::uint16_t>(((ds.u8(c) & 0x3E) >> 1) | ((ds.u8(static_cast<std::uint16_t>(c + 1)) & 0x3E) << 4) |
+                                                         ((ds.u8(static_cast<std::uint16_t>(c + 2)) & 0x3E) << 9));
+            for (std::uint16_t d = ds.u16(static_cast<std::uint16_t>(0x1BD8 + si)); ds.u16(d) != 0xFFFF; d = static_cast<std::uint16_t>(d + 2)) {
+                const std::uint16_t t = ds.u16(d);
+                ds.set_u16(d, v);
+                v = t;
+            }
+            ds.set_u8(c, static_cast<std::uint8_t>((v << 1) & 0x3E));
+            ds.set_u8(static_cast<std::uint16_t>(c + 2), static_cast<std::uint8_t>((v >> 9) & 0x3E));
+            ds.set_u8(static_cast<std::uint16_t>(c + 1), static_cast<std::uint8_t>((v >> 4) & 0x3E));
+            vm_->retint_range(c, 1);
+        }
+        ds.set_u16(static_cast<std::uint16_t>(0x1BA8 + si), ds.u16(static_cast<std::uint16_t>(0x1B98 + si)));
+    }
+}
+
+// sub_10AC1: screen shake offsets ds:344h (x) and ds:346h (y).
+void Game::update_shake() {
+    DataSegment& ds = machine_->ds;
+    for (int axis = 0; axis < 2; ++axis) {
+        const std::uint16_t ticks = static_cast<std::uint16_t>(0x348 + 2 * axis), mask = static_cast<std::uint16_t>(0x340 + 2 * axis);
+        const std::uint16_t off = static_cast<std::uint16_t>(0x344 + 2 * axis);
+        if (ds.u16(ticks) && (ds.set_u16(ticks, static_cast<std::uint16_t>(ds.u16(ticks) - 1)), ds.u16(mask)))
+            ds.set_u16(off, ds.u16(off) ^ ds.u16(mask));
+        else
+            ds.set_u16(off, 0);
+    }
+}
+
+// sub_18822: tile animations enabled in ds:1BE8h copy their next frame into
+// the tileset (pixels) and the tile masks.
+void Game::animate_tiles() {
+    DataSegment& ds = machine_->ds;
+    for (int bp = 0xE; bp >= 0; bp -= 2) {
+        if (!(ds.u16(0x1BE8) & ds.u16(static_cast<std::uint16_t>(0x288A + bp)))) continue;
+        const std::uint16_t a = static_cast<std::uint16_t>(0x1BFA + bp);
+        const int delay = static_cast<std::int16_t>(static_cast<std::uint16_t>(ds.u16(a) - 1));
+        ds.set_u16(a, static_cast<std::uint16_t>(delay));
+        if (delay > 0) continue;
+        if (delay < 0) {
+            std::uint16_t v = ds.u16(static_cast<std::uint16_t>(0x1BEA + bp));
+            if (static_cast<std::int16_t>(v) < 0) v = static_cast<std::uint16_t>((vm_->random() & v & 0x7F) + 2);
+            ds.set_u16(a, v);
+        }
+        const std::uint16_t first = ds.u16(static_cast<std::uint16_t>(0x1C2A + bp));
+        const int count = ds.u16(static_cast<std::uint16_t>(0x1C3A + bp));
+        std::uint16_t src = static_cast<std::uint16_t>(0x48 * count * ds.u16(static_cast<std::uint16_t>(0x1C1A + bp)) + ds.u16(static_cast<std::uint16_t>(0x1C4A + bp)));
+        std::uint16_t di = first, mi = static_cast<std::uint16_t>(first >> 3);
+        for (int n = 0; n < count * 8; ++n) {
+            machine_->tile_masks[mi++ & 0x1FFF] = machine_->tile_anims[src++];
+            for (int k = 0; k < 8; ++k) machine_->tiles[di++] = machine_->tile_anims[src++];
+        }
+        if (ds.u16(a) != 0) {
+            int f = ds.u16(static_cast<std::uint16_t>(0x1C1A + bp)) + 1;
+            if (f >= ds.u16(static_cast<std::uint16_t>(0x1C0A + bp))) f = 0;
+            ds.set_u16(static_cast<std::uint16_t>(0x1C1A + bp), static_cast<std::uint16_t>(f));
+        }
+    }
 }
 
 // sub_1011B: on a level exit every actor's script restarts once (ds:316h),

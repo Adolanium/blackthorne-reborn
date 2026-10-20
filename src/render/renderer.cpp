@@ -67,10 +67,18 @@ void Renderer::render_screen(const Game& game, Image& out, const RenderOptions& 
     render(game, play, opt);
     out.resize(kScreenWidth, kScreenHeight);
     const bool hud = game.has_hud();
-    const int ox = hud ? 0 : (kScreenWidth - kWidth) / 2, oy = hud ? 0 : (kScreenHeight - kHeight) / 2;
-    for (int y = 0; y < kHeight; ++y)
-        std::copy_n(&play.pixels[static_cast<std::size_t>(y) * kWidth], kWidth,
-                    &out.pixels[static_cast<std::size_t>(y + oy) * kScreenWidth + ox]);
+    // Screen shake (sub_10AC1 offsets, applied by the page flip).
+    const DataSegment& ds = game.machine().ds;
+    const int shake_x = static_cast<std::int16_t>(ds.u16(0x344)), shake_y = static_cast<std::int16_t>(ds.u16(0x346));
+    const int ox = (hud ? 0 : (kScreenWidth - kWidth) / 2) - shake_x, oy = (hud ? 0 : (kScreenHeight - kHeight) / 2) - shake_y;
+    for (int y = 0; y < kHeight; ++y) {
+        const int sy = y + oy;
+        if (sy < 0 || sy >= kScreenHeight) continue;
+        for (int x = 0; x < kWidth; ++x) {
+            const int sx = x + ox;
+            if (sx >= 0 && sx < kScreenWidth) out.pixels[static_cast<std::size_t>(sy) * kScreenWidth + sx] = play.pixels[static_cast<std::size_t>(y) * kWidth + x];
+        }
+    }
     if (hud) draw_hud(game, out);
 }
 
@@ -138,7 +146,6 @@ void Renderer::render(const Game& game, Image& out, const RenderOptions& opt) co
 void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, Image& out) const {
     const Machine& m = game.machine();
     const DataSegment& ds = m.ds;
-    const Level& lv = game.level();
     const int cam_x = static_cast<std::int16_t>(ds.u16(0x1B4E)), cam_y = static_cast<std::int16_t>(ds.u16(0x1B50));
     const int map_w = ds.u16(Machine::kMapWidth), map_h = ds.u16(Machine::kMapHeight);
     const std::uint16_t row_bytes = ds.u16(Machine::kMapRowBytes);
@@ -150,8 +157,9 @@ void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, Image& o
             const std::uint16_t mt = static_cast<std::uint16_t>(metatiles + (cell & 0x3FF) * 8);
             for (int k = 0; k < 4; ++k) {
                 const TileRef ref{m.map_u16(static_cast<std::uint16_t>(mt + 2 * k))};
-                if (ref.tile() >= static_cast<int>(lv.tiles.size())) continue;
-                const Tile& t = lv.tiles[ref.tile()];
+                const std::size_t tile = static_cast<std::size_t>(ref.tile());
+                const std::uint8_t* px = m.tiles.data() + tile * 64;
+                const std::uint8_t* mask = m.tile_masks.data() + ((tile * 8) & 0x1FFF);
                 const int ox = mx * 16 + (k & 1) * 8 - cam_x, oy = my * 16 + (k >> 1) * 8 - cam_y;
                 for (int y = 0; y < 8; ++y) {
                     const int sy = oy + y;
@@ -159,8 +167,11 @@ void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, Image& o
                     for (int x = 0; x < 8; ++x) {
                         const int sx = ox + x;
                         if (sx < 0 || sx >= kWidth) continue;
-                        const int v = t[(ref.flip_y() ? 7 - y : y) * 8 + (ref.flip_x() ? 7 - x : x)];
-                        if (!v) continue;
+                        // Planar 8x8: byte = plane * 16 + row * 2 + col; one mask bit per data byte.
+                        const int ty = ref.flip_y() ? 7 - y : y, tx = ref.flip_x() ? 7 - x : x;
+                        const int plane = tx & 3, col = tx >> 2;
+                        if (!(mask[plane * 2 + (ty >> 2)] & (0x80 >> ((ty & 3) * 2 + col)))) continue;
+                        const int v = px[plane * 16 + ty * 2 + col];
                         out.pixels[static_cast<std::size_t>(sy) * kWidth + sx] = colour(ds, v >= 16 ? v : v + ref.palette_row() * 16);
                     }
                 }
