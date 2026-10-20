@@ -60,6 +60,11 @@ public:
     void render_screen(const Scene& scene, Image& out, const RenderOptions& opt = {}) const;
     void render_screen(const Game& game, Image& out, const RenderOptions& opt = {}) const;  // game.display()
 
+    // A whole map layer (the background or the foreground) at 1x, transparent
+    // where no tile pixel is set. pass: 0 = tiles without bit 3, 8 = tiles
+    // with it (drawn in front of sprites), -1 = both.
+    void render_layer(const Scene& scene, bool background, int pass, Image& out) const;
+
 private:
     // A map layer: cells at `layer_offset` in the map segment, `row_bytes` per row,
     // `width` x `height` cells, viewed from (cam_x, cam_y).

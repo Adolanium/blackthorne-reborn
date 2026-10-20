@@ -222,8 +222,8 @@ void Renderer::draw_layer(const Scene& scene, std::uint16_t layer_offset, int ro
     const Machine& m = (*scene.machine);
     const DataSegment& ds = m.ds;
     const std::uint16_t metatiles = ds.u16(Machine::kMetatileTable);
-    const int width = out.width;
-    for (int my = cam_y >> 4; my <= (cam_y + kHeight) >> 4; ++my) {
+    const int width = out.width, height = out.height;
+    for (int my = cam_y >> 4; my <= (cam_y + height) >> 4; ++my) {
         for (int mx = cam_x >> 4; mx <= (cam_x + width) >> 4; ++mx) {
             if (mx < 0 || my < 0 || mx >= map_w || my >= map_h) continue;
             const std::uint16_t cell = m.map_u16(static_cast<std::uint16_t>(layer_offset + my * row_bytes + mx * 2));
@@ -237,7 +237,7 @@ void Renderer::draw_layer(const Scene& scene, std::uint16_t layer_offset, int ro
                 const int ox = mx * 16 + (k & 1) * 8 - cam_x, oy = my * 16 + (k >> 1) * 8 - cam_y;
                 for (int y = 0; y < 8; ++y) {
                     const int sy = oy + y;
-                    if (sy < 0 || sy >= kHeight) continue;
+                    if (sy < 0 || sy >= height) continue;
                     for (int x = 0; x < 8; ++x) {
                         const int sx = ox + x;
                         if (sx < 0 || sx >= width) continue;
@@ -330,6 +330,21 @@ void Renderer::draw_text(const Scene& scene, int x0, const Image* tiles, Image& 
 }  // namespace bt
 
 namespace bt {
+
+void Renderer::render_layer(const Scene& scene, bool background, int pass, Image& out) const {
+    const DataSegment& ds = scene.machine->ds;
+    const int w = background ? ds.u16(0x1D15) : ds.u16(Machine::kMapWidth);
+    const int h = background ? ds.u16(0x1D17) : ds.u16(Machine::kMapHeight);
+    out.resize(w * 16, h * 16);
+    std::fill(out.pixels.begin(), out.pixels.end(), 0u);  // transparent
+    for (int p : {0, 8}) {
+        if (pass >= 0 && p != pass) continue;
+        if (background)
+            draw_layer(scene, ds.u16(0x25B2), ds.u16(0x1CA0), w, h, 0, 0, p, out);
+        else
+            draw_layer(scene, ds.u16(0x25B0), ds.u16(Machine::kMapRowBytes), w, h, 0, 0, p, out);
+    }
+}
 
 Scene live_scene(const Game& game) {
     const Machine& m = game.machine();

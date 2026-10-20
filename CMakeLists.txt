@@ -22,6 +22,12 @@ FetchContent_Declare(
     URL https://github.com/schellingb/TinySoundFont/archive/853a0a171759f1ddba0de1442133a75912bbeffa.tar.gz
 )
 FetchContent_MakeAvailable(tinysoundfont)
+# stb_image / stb_image_write (public domain): PNGs for art packs and exports.
+FetchContent_Declare(
+    stb
+    URL https://github.com/nothings/stb/archive/a7d4c2175630e1ea5b6f8dd00ab96fed0b97b96d.tar.gz
+)
+FetchContent_MakeAvailable(stb)
 
 add_library(btdata STATIC
     src/data/actors.cpp
@@ -44,8 +50,9 @@ add_library(btengine STATIC
 )
 target_link_libraries(btengine PUBLIC btdata)
 
-add_library(btrender STATIC src/render/renderer.cpp src/render/filters.cpp)
+add_library(btrender STATIC src/render/renderer.cpp src/render/filters.cpp src/render/png.cpp)
 target_link_libraries(btrender PUBLIC btengine)
+target_include_directories(btrender PRIVATE ${stb_SOURCE_DIR})
 
 add_library(btaudio STATIC src/audio/audio.cpp src/audio/music.cpp)
 target_link_libraries(btaudio PUBLIC btengine SDL3::SDL3-static)
@@ -103,3 +110,6 @@ target_link_libraries(btmusicwav PRIVATE btaudio)
 
 add_executable(bttrace tests/trace.cpp)
 target_link_libraries(bttrace PRIVATE btrender)
+
+add_executable(btexport src/export/main.cpp)
+target_link_libraries(btexport PRIVATE btrender)
