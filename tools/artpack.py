@@ -332,14 +332,21 @@ def cmd_stitch_hud(args):
 
 # Sprites -------------------------------------------------------------------
 
-def random_input(seed, frames):
-    """Scripted play like tools/playtest.py: random moves, jumps, shots."""
+def random_input(seed, frames, explore=False):
+    """Scripted play like tools/playtest.py: random moves, jumps, shots.
+    explore: mostly long walks and runs one way, to get further."""
     r = random.Random(seed)
     moves = [0x20, 0x10, 0x220, 0x210, 0x100, 0x120, 0x110, 0x8, 0x4, 0, 0x40, 0x80, 0x400, 0x800, 0x1000, 0x2000, 0x60, 0x50]
+    way = r.choice((0x20, 0x10))
     spec, t = [], 60
     while t < frames:
         n = r.randint(3, 40)
         bits = r.choice(moves)
+        if explore and r.random() < 0.6:
+            if r.random() < 0.15:
+                way ^= 0x30
+            n = r.randint(30, 160)
+            bits = way | r.choice((0, 0x200, 0x100))
         if bits:
             spec.append("%d-%d:%x" % (t, t + n - 1, bits))
         t += n + r.randint(0, 6)
@@ -355,7 +362,7 @@ def cmd_collect(args):
         for run in range(args.runs):
             cmd = [args.exe, args.data, "--level", level, "--ticks", str(args.frames), "--size", "320x240", "--shot", tmp,
                    "--pack", os.path.join(args.export, "no-pack"), "--parts", out,
-                   "--input", random_input(int(level, 16) * 100 + run, args.frames)]
+                   "--input", random_input(int(level, 16) * 100 + run, args.frames, explore=args.explore)]
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode:
                 print(f"{level} run {run}: exit {r.returncode} {r.stderr.strip()[:200]}")
@@ -373,17 +380,25 @@ def cmd_split_sprites(args):
     """Puts the collected parts on sheets for the model, by size: each sheet
     is at most 256x224 game pixels (1024x896 at 4x)."""
     src = os.path.join(args.export, "sprites")
-    names = sorted(n[:-4] for n in os.listdir(src) if n.endswith(".png"))
-    by_size = {}
-    for key in names:
-        by_size.setdefault(Image.open(os.path.join(src, key + ".png")).width, []).append(key)
     base = os.path.join(args.work, "sprites")
     os.makedirs(os.path.join(base, "in"), exist_ok=True)
     os.makedirs(os.path.join(base, "out"), exist_ok=True)
-    sheets = []
+    # Sheets made before stay as they are (they may be repainted already);
+    # parts collected since go on new sheets.
+    sheets, done = [], set()
+    manifest = os.path.join(base, "manifest.json")
+    if os.path.exists(manifest):
+        with open(manifest) as f:
+            sheets = json.load(f)["sheets"]
+        done = {c["key"] for sh in sheets for c in sh["cells"]}
+    names = sorted(n[:-4] for n in os.listdir(src) if n.endswith(".png") and n[:-4] not in done)
+    by_size = {}
+    for key in names:
+        by_size.setdefault(Image.open(os.path.join(src, key + ".png")).width, []).append(key)
     for size, keys in sorted(by_size.items()):
         pitch = size + GAP
         cols, rows = max(1, (SHEET - GAP) // pitch), max(1, (224 - GAP) // pitch)
+        number = sum(1 for sh in sheets if sh["name"].startswith(f"s{size}_"))
         for first in range(0, len(keys), cols * rows):
             batch = keys[first:first + cols * rows]
             used_rows = (len(batch) + cols - 1) // cols
@@ -396,12 +411,13 @@ def cmd_split_sprites(args):
                 part = part.resize((size * SCALE, size * SCALE), Image.NEAREST)
                 sheet.paste(part, (x * SCALE, y * SCALE), mask=part.getchannel("A"))
                 cells.append({"key": key, "x": x, "y": y, "size": size})
-            name = f"s{size}_{first // (cols * rows)}.png"
+            name = f"s{size}_{number}.png"
+            number += 1
             sheet.save(os.path.join(base, "in", name))
             sheets.append({"name": name, "width": w, "height": h, "cells": cells})
     with open(os.path.join(base, "manifest.json"), "w") as f:
         json.dump({"scale": SCALE, "key": "#%02x%02x%02x" % KEY, "sheets": sheets}, f, indent=1)
-    print(f"{len(names)} parts on {len(sheets)} sheets in {base}")
+    print(f"{len(names)} new parts; {len(sheets)} sheets in {base}")
 
 
 def cmd_stitch_sprites(args):
@@ -506,6 +522,7 @@ def main():
     s.add_argument("--levels")
     s.add_argument("--runs", type=int, default=3, help="random play-throughs per level")
     s.add_argument("--frames", type=int, default=3000)
+    s.add_argument("--explore", action="store_true", help="long walks one way instead of short random moves")
     s.set_defaults(func=cmd_collect)
     s = sub.add_parser("split-sprites")
     s.add_argument("export")
