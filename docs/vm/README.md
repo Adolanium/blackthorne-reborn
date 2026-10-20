@@ -82,3 +82,16 @@ Mode X tweaked to 320x240: CRTC table at `ds:5316h` (vertical display end
 0x1DF over 480 double-scanned lines, offset register 0x2B = 86 bytes =
 344-pixel virtual rows). The playfield is 256x224 (map redraw clips at
 0x100 x 0xE0 in `sub_18910`); the HUD uses the remaining area.
+
+## Timing
+
+- The Miles AIL timer service runs a 66 Hz callback (`seg002:0A0A`) that
+  waits for vertical retrace, re-arms the PIT and far-calls `seg000:2815`. So
+  the game is locked to the 60 Hz display refresh.
+- `seg000:2815` applies the fine horizontal scroll (attribute register 0x13
+  from `ds:5314h`) and decrements the frame counter `ds:5312h`.
+- The page flip (`sub_1283B`) adds `ds:68h` to that counter. `ds:68h` is 2
+  by default (`loc_190B4`), so game logic runs at **30 ticks per second**.
+- Typing `FASTER` (string at `ds:70EEh`, matched by `sub_190C1`) toggles
+  `ds:68h` between 2 and 1, i.e. 30 and 60 ticks per second.
+- A second AIL timer at 250 ms (`ds:253Ch`, `sub_19566`) drives music fades.
