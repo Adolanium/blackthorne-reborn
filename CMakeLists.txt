@@ -54,6 +54,22 @@ endif()
 add_executable(blackthorne WIN32 src/game/main.cpp)
 target_link_libraries(blackthorne PRIVATE btrender btaudio SDL3::SDL3-static)
 
+# GeneralUser GS (free SoundFont by S. Christian Collins, see its LICENSE.txt),
+# placed next to the game so the music uses it out of the box.
+option(BT_FETCH_SOUNDFONT "Download the GeneralUser GS SoundFont" ON)
+if(BT_FETCH_SOUNDFONT)
+    set(GUGS_URL https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/684543d5e5efaef08d02be50dcda8d552478fa60)
+    set(GUGS_DIR ${CMAKE_BINARY_DIR}/soundfont)
+    if(NOT EXISTS ${GUGS_DIR}/GeneralUser-GS.sf2)
+        file(DOWNLOAD ${GUGS_URL}/GeneralUser-GS.sf2 ${GUGS_DIR}/GeneralUser-GS.sf2
+             EXPECTED_HASH SHA256=9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe)
+        file(DOWNLOAD ${GUGS_URL}/documentation/LICENSE.txt ${GUGS_DIR}/GeneralUser-GS-LICENSE.txt)
+    endif()
+    add_custom_command(TARGET blackthorne POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GUGS_DIR}/GeneralUser-GS.sf2 ${GUGS_DIR}/GeneralUser-GS-LICENSE.txt
+                $<TARGET_FILE_DIR:blackthorne>)
+endif()
+
 add_executable(btviewer src/viewer/main.cpp)
 target_link_libraries(btviewer PRIVATE btrender SDL3::SDL3-static)
 

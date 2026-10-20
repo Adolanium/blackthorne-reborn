@@ -70,13 +70,15 @@ several keys can share an action, for example `key.jump=Space,Left Ctrl`.
 
 ### Music
 
-By default the music plays on the system MIDI synth: the Microsoft GS
-Wavetable Synth on Windows, the same output as Blizzard's DOSBox release. Put
-a General MIDI SoundFont (`.sf2`) in the settings folder, or next to the
-game, to render the music with it instead. This works on every platform and
-sounds much richer. [GeneralUser GS](https://github.com/mrbumpy409/GeneralUser-GS)
-is a good free choice. `soundfont=path` in `settings.ini` picks a
-specific file.
+The build downloads [GeneralUser GS](https://github.com/mrbumpy409/GeneralUser-GS),
+a free General MIDI SoundFont, and puts it next to the game with its license.
+The music then renders through it on every platform. To skip the download,
+configure with `-DBT_FETCH_SOUNDFONT=OFF`.
+
+The game uses `soundfont=path` from `settings.ini` if set, else the first
+`.sf2` in the settings folder or next to the game. Without any SoundFont the
+music plays on the system MIDI synth: on Windows the Microsoft GS Wavetable
+Synth, the same output as Blizzard's DOSBox release.
 
 Options are `blackthorne [DATA.DAT] [--filter 0-3] [--wide 0|1] [--level hex]`. `--level`
 starts a level directly, for example `--level C1`.
