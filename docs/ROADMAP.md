@@ -28,13 +28,16 @@ adds presentation upgrades on top.
 - [x] Input (original controls), passwords and save file hooks
 - [x] Palette cycling, tile animation, screen shake
 - [x] Sound effects (VOC) and General MIDI music / MIDI effects
-- [ ] Pause and the in-game Esc menu flow, black-frame transitions
-- [ ] Verify gameplay against DOSBox (movement, combat, items, elevators)
+- [x] Pause and the in-game Esc menu flow, black-frame transitions
+- [x] Frame-exact main loop (screen flips, fades, menus) checked against the
+      original running headless (docs/ACCURACY.md)
+- [ ] Extend the accuracy check to longer play and every level
 - [ ] Remaining open details: palette id 0x48 (colour 0x0707), stray intro glyphs
 
 ## Phase 3: Make it beautiful
-- [ ] Widescreen viewport (wider camera over existing maps)
-- [ ] High-resolution output with integer/sharp-bilinear scaling and CRT shader options
+- [x] Widescreen viewport (wider camera over existing maps)
+- [x] Display filters: sharp, pixel perfect, Scale4x, CRT scanlines
 - [ ] Optional upscaled art pipeline (palette-aware)
 - [ ] Lighting/parallax/particle polish where it fits the art
-- [ ] Gamepad, rebinding, quick save
+- [x] Gamepad, rebinding, quick save
+- [x] SoundFont music (GeneralUser GS, fetched at build time)
