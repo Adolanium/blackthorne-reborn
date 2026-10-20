@@ -73,7 +73,16 @@ This found:
 - the display model above, including the palette upload flag that palette
   cycling sets every frame.
 
-Known cosmetic difference: the original's bottom bar shares video memory with
+Known cosmetic differences come from how the original paints. It keeps two
+video pages and repaints only the screen cells marked dirty. A sprite is
+redrawn only where it overlaps such a cell (sub_15880). So where several
+actors overlap and only some are redrawn, or a tile changes without its
+cell being marked, the original shows stale pixels or a different overlap
+order for a few frames. Ours repaints the whole picture every frame from the
+same state. These spots are small and short, and the game state behind them
+is identical.
+
+The original's bottom bar also shares video memory with
 the first rows of a page. Its last line from x=216 picks up stray bytes
 after screen flips. Ours draws the bar intact.
 
