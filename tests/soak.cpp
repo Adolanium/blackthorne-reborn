@@ -3,6 +3,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <stdexcept>
 #include <random>
 #include <string>
 
@@ -51,6 +53,22 @@ int main(int argc, char** argv) {
                 game.tick();
                 game.vm().events().clear();
             }
+            // Save-state round trip: a fresh game loaded from the save must
+            // stay in lockstep with this one.
+            const auto save = std::filesystem::temp_directory_path() / "btsoak.bts";
+            game.save_state(save);
+            bt::Game copy(archive, data.parent_path() / "BTHORNE.EXE");
+            copy.load_state(save);
+            for (int k = 0; k < 300; ++k, ++t) {
+                if (t % 20 == 0) held = static_cast<std::uint16_t>(rng() & 0x07FC);
+                for (bt::Game* g : {&game, &copy}) {
+                    g->set_input(held);
+                    g->tick();
+                    g->vm().events().clear();
+                }
+            }
+            if (std::memcmp(game.machine().ds.raw(), copy.machine().ds.raw(), bt::DataSegment::kSize) != 0)
+                throw std::runtime_error("save state diverged after loading");
             std::printf("level %02X ok: %d ticks, now on level %02X, Kyle (%d,%d)\n", level, ticks, game.level_id(),
                         static_cast<std::int16_t>(ds.field(0x15F2, 0)), static_cast<std::int16_t>(ds.field(0x161A, 0)));
         } catch (const std::exception& e) {

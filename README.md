@@ -49,7 +49,12 @@ build/Release/blackthorne.exe [path/to/DATA.DAT]
 Boots the original game flow (logos, menu, intro, levels) on the new engine.
 Controls are the original ones: arrows move, F fires, R shoots backward,
 Space jumps, D runs, S draws/holsters the gun, E uses an item, [ and ] cycle
-the inventory, Enter confirms, Esc opens the menu. F11 toggles fullscreen.
+the inventory, Enter confirms, Esc opens the menu, P asks to give up. F11
+toggles fullscreen, F5 quick-saves and F9 quick-loads.
+
+Gamepads work too: d-pad or left stick to move, A jump, X fire, Y draw or
+holster, B use item, LB/RB cycle items, RT run, LT shoot backward, Start
+confirms and Back opens the menu.
 Sound effects play through SDL; music and MIDI effects use the General MIDI
 versions of the songs on the system MIDI synthesizer (Windows), as Blizzard's
 2013 release did. The HUD is not implemented yet.

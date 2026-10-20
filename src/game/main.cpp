@@ -19,6 +19,33 @@ namespace {
 constexpr const char* kDefaultData = "C:/Program Files (x86)/Blizzard Classics/Blackthorne/BTHORNE/DATA.DAT";
 constexpr double kTickSeconds = 1.0 / 30.0;  // the original runs at 60 Hz / 2
 
+// Gamepad layout: d-pad / left stick move, A jump, X fire, Y draw/holster,
+// B use item, LB/RB cycle items, RT run, LT shoot backward, Start = Enter,
+// Back = Esc.
+std::uint16_t read_gamepad(SDL_Gamepad* pad) {
+    using G = bt::Game;
+    if (!pad) return 0;
+    auto button = [&](SDL_GamepadButton b) { return SDL_GetGamepadButton(pad, b); };
+    const int lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX), ly = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
+    constexpr int kDead = 12000;
+    std::uint16_t bits = 0;
+    if (button(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || lx < -kDead) bits |= G::kLeft;
+    if (button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || lx > kDead) bits |= G::kRight;
+    if (button(SDL_GAMEPAD_BUTTON_DPAD_UP) || ly < -kDead) bits |= G::kUp;
+    if (button(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || ly > kDead) bits |= G::kDown;
+    if (button(SDL_GAMEPAD_BUTTON_SOUTH)) bits |= G::kJump;
+    if (button(SDL_GAMEPAD_BUTTON_WEST)) bits |= G::kFire;
+    if (button(SDL_GAMEPAD_BUTTON_NORTH)) bits |= G::kGun;
+    if (button(SDL_GAMEPAD_BUTTON_EAST)) bits |= G::kUseItem;
+    if (button(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) bits |= G::kItemPrev;
+    if (button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) bits |= G::kItemNext;
+    if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 8000) bits |= G::kRun;
+    if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 8000) bits |= G::kShootBack;
+    if (button(SDL_GAMEPAD_BUTTON_START)) bits |= G::kEnter;
+    if (button(SDL_GAMEPAD_BUTTON_BACK)) bits |= G::kEscape;
+    return bits;
+}
+
 std::uint16_t read_controls() {
     using G = bt::Game;
     const bool* k = SDL_GetKeyboardState(nullptr);
@@ -63,7 +90,11 @@ int main(int argc, char** argv) {
     bt::Audio audio(*archive);
     bt::Music music(*archive);
 
-    if (!SDL_Init(SDL_INIT_VIDEO)) return 1;
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) return 1;
+    SDL_Gamepad* pad = nullptr;
+    const char* pref = SDL_GetPrefPath("Adolanium", "BlackthorneReborn");
+    const std::filesystem::path save_path = std::filesystem::path(pref ? pref : "") / "quicksave.bts";
+    SDL_free(const_cast<char*>(pref));
     SDL_Window* window = nullptr;
     SDL_Renderer* sdl = nullptr;
     if (!SDL_CreateWindowAndRenderer("Blackthorne Reborn", bt::Renderer::kScreenWidth * 4, bt::Renderer::kScreenHeight * 4,
@@ -85,13 +116,27 @@ int main(int argc, char** argv) {
             if (e.type == SDL_EVENT_QUIT) running = false;
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_F11)
                 SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+            if (e.type == SDL_EVENT_GAMEPAD_ADDED && !pad) pad = SDL_OpenGamepad(e.gdevice.which);
+            if (e.type == SDL_EVENT_GAMEPAD_REMOVED && pad && SDL_GetGamepadID(pad) == e.gdevice.which) {
+                SDL_CloseGamepad(pad);
+                pad = nullptr;
+            }
+            if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && (e.key.key == SDLK_F5 || e.key.key == SDLK_F9)) {
+                try {
+                    if (e.key.key == SDLK_F5) game->save_state(save_path);
+                    else game->load_state(save_path);
+                    SDL_SetWindowTitle(window, e.key.key == SDLK_F5 ? "Blackthorne Reborn - saved" : "Blackthorne Reborn - loaded");
+                } catch (const std::exception& ex) {
+                    SDL_SetWindowTitle(window, (std::string("Blackthorne Reborn - ") + ex.what()).c_str());
+                }
+            }
         }
         const Uint64 now = SDL_GetTicksNS();
         acc += static_cast<double>(now - last) / 1e9;
         last = now;
         for (int steps = 0; acc >= kTickSeconds && steps < 5; ++steps) {
             acc -= kTickSeconds;
-            game->set_input(read_controls());
+            game->set_input(static_cast<std::uint16_t>(read_controls() | read_gamepad(pad)));
             try {
                 game->tick();
             } catch (const std::exception& ex) {
@@ -119,6 +164,7 @@ int main(int argc, char** argv) {
         SDL_RenderTexture(sdl, tex, nullptr, &dst);
         SDL_RenderPresent(sdl);
     }
+    if (pad) SDL_CloseGamepad(pad);
     SDL_DestroyTexture(tex);
     SDL_DestroyRenderer(sdl);
     SDL_DestroyWindow(window);

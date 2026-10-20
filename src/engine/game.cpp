@@ -1,6 +1,7 @@
 #include "engine/game.h"
 
 #include <algorithm>
+#include <fstream>
 #include <stdexcept>
 
 namespace bt {
@@ -30,6 +31,62 @@ Game::Game(const Archive& archive, const std::filesystem::path& exe_path, int la
     for (std::uint16_t a = 0x6A78; ds.u16(a) != 0xFFFF; a = static_cast<std::uint16_t>(a + 2))
         for (std::uint8_t b : archive.resource(ds.u16(a))) ds.set_u8(dst++, b);
     vm_ = std::make_unique<Vm>(*machine_);
+}
+
+namespace {
+constexpr char kSaveMagic[8] = {'B', 'T', 'R', 'S', 'A', 'V', 'E', '1'};
+}
+
+void Game::save_state(const std::filesystem::path& path) const {
+    std::ofstream out(path, std::ios::binary);
+    if (!out) throw std::runtime_error("cannot write " + path.string());
+    const Machine& m = *machine_;
+    auto put = [&](const void* p, std::size_t n) { out.write(static_cast<const char*>(p), static_cast<std::streamsize>(n)); };
+    put(kSaveMagic, sizeof kSaveMagic);
+    const std::int32_t header[3] = {level_id_, has_background_ ? 1 : 0, menu_.active ? (menu_.quit_menu ? 2 : 1) | (menu_.darkened ? 4 : 0) : 0};
+    put(header, sizeof header);
+    put(m.ds.raw(), DataSegment::kSize);
+    put(m.map.data(), m.map.size());
+    put(m.frames.data(), m.frames.size());
+    put(m.statics.data(), m.statics.size());
+    put(m.tiles.data(), m.tiles.size());
+    put(m.tile_masks.data(), m.tile_masks.size());
+    put(m.tile_anims.data(), m.tile_anims.size());
+    if (!out) throw std::runtime_error("cannot write " + path.string());
+}
+
+void Game::load_state(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw std::runtime_error("no save at " + path.string());
+    char magic[sizeof kSaveMagic];
+    in.read(magic, sizeof magic);
+    if (!in || !std::equal(magic, magic + sizeof magic, kSaveMagic)) throw std::runtime_error(path.string() + " is not a save state");
+    std::int32_t header[3];
+    in.read(reinterpret_cast<char*>(header), sizeof header);
+    auto machine = std::make_unique<Machine>();
+    machine->scripts = machine_->scripts;
+    machine->text = machine_->text;
+    std::vector<std::uint8_t> ds(DataSegment::kSize);
+    auto get = [&](void* p, std::size_t n) { in.read(static_cast<char*>(p), static_cast<std::streamsize>(n)); };
+    get(ds.data(), ds.size());
+    get(machine->map.data(), machine->map.size());
+    get(machine->frames.data(), machine->frames.size());
+    get(machine->statics.data(), machine->statics.size());
+    get(machine->tiles.data(), machine->tiles.size());
+    get(machine->tile_masks.data(), machine->tile_masks.size());
+    get(machine->tile_anims.data(), machine->tile_anims.size());
+    if (!in) throw std::runtime_error(path.string() + " is truncated");
+    for (std::size_t i = 0; i < ds.size(); ++i) machine->ds.set_u8(static_cast<std::uint16_t>(i), ds[i]);
+    // Sprite banks: the ids the level loaded are in ds:1152h (slot = index).
+    for (int si = 0; si < 0x20; si += 2) {
+        const std::uint16_t id = machine->ds.u16(static_cast<std::uint16_t>(0x1152 + si));
+        if (id && id != 0xFFFF && id < 353) machine->banks[si / 2] = archive_.resource(id);
+    }
+    level_id_ = header[0];
+    has_background_ = header[1] != 0;
+    menu_ = {header[2] != 0, (header[2] & 3) == 2, (header[2] & 4) != 0};
+    level_ = bt::load_level(archive_, level_id_ - 1);
+    *machine_ = std::move(*machine);
 }
 
 void Game::boot() {

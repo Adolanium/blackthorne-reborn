@@ -35,6 +35,11 @@ public:
     // One game tick (30 per second).
     void tick();
 
+    // Save states: the whole machine memory plus the level id. Banks and the
+    // static level data are reloaded from DATA.DAT. Throws on I/O errors.
+    void save_state(const std::filesystem::path& path) const;
+    void load_state(const std::filesystem::path& path);
+
     Machine& machine() { return *machine_; }
     const Machine& machine() const { return *machine_; }
     Vm& vm() { return *vm_; }
