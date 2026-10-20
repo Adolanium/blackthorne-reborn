@@ -31,8 +31,16 @@ struct Machine {
     std::array<std::uint8_t, 32 * 28> repainted{};
     Bytes text;
     static constexpr std::size_t kTextImageSize = 0x4240;
+    // Past the data segment's own image and stack (8110h bytes) come the
+    // buffers DOS allocated next: the tile animation frames (2000h bytes,
+    // ds:2594h) and then the tile graphics (ds:2596h).
+    static constexpr std::size_t kHeapStart = 0x8110, kTileAnimBytes = 0x2000;
     std::uint8_t text_u8(std::uint16_t off) const {
-        return off < kTextImageSize ? text[off] : ds.u8(static_cast<std::uint16_t>(off - kTextImageSize));
+        if (off < kTextImageSize) return text[off];
+        const std::size_t d = off - kTextImageSize;
+        if (d < kHeapStart) return ds.u8(static_cast<std::uint16_t>(d));
+        const std::size_t h = d - kHeapStart;
+        return h < kTileAnimBytes ? tile_anims[h] : tiles[h - kTileAnimBytes];
     }
 
     // Sprite memory. Segment numbers stored in the data segment are these

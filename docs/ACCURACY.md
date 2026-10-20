@@ -133,12 +133,12 @@ Since then it has caught:
   were not kept.
 - Several smaller ordering details (see the git log).
 
-Known difference: on the special level 15Eh a script asks for text A1h,
-beyond the end of the English text table. The original then reads its width
-from heap memory above the EXE image, at offset FFFFh of the text segment.
-Ours models the text segment, seg002 and the data segment behind it, but not
-the DOS heap, so the portrait position word ds:36Ch differs there. Nothing
-else changes. Before this was modelled, that read crashed our engine.
+On the special level 15Eh a script asks for text A1h, beyond the end of the
+English text table. The original then reads the width at offset FFFFh of
+its text segment. That address is past its data segment and stack, in the
+tile graphics buffer that DOS allocated there. Text reads in ours follow the
+same memory layout: the EXE image of seg001 and seg002, the data segment,
+the tile animation buffer, then the tile graphics. So this matches too.
 
 Screens: on all 21 levels, 12 screens each over 3,000 frames of random
 play, what ours displays matches what the original displays pixel for
