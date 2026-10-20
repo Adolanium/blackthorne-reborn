@@ -146,4 +146,4 @@ class Vga:
         img = Image.new('P', (len(rows[0]), len(rows)))
         img.putpalette([c * 255 // 63 for c in dac])
         img.putdata(b''.join(rows))
-        img.convert('RGB').save(path)
+        img.save(path)  # indexed: the palette indices stay inspectable

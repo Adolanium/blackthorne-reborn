@@ -279,7 +279,7 @@ void Renderer::draw_parts(const Game& game, int cam_x, int cam_y, int priority, 
                 const int plane = scol & 3;
                 const std::uint8_t v = raw[static_cast<std::size_t>((plane * size + srow) * cols + (scol >> 2))];
                 if (!v) continue;
-                out.pixels[static_cast<std::size_t>(sy) * width + sx] = colour(ds, v | base);
+                out.pixels[static_cast<std::size_t>(sy) * width + sx] = colour(ds, v >= 16 ? v : v | base);  // like tiles: a set high nibble is an absolute colour
             }
         }
     }
