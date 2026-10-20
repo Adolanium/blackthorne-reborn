@@ -64,6 +64,10 @@ F7 toggles widescreen (432x240). The extra columns show the neighbouring
 screens, dimmed so the active screen stays clear. Enemies there are not yet
 awake, because the game still only spawns the screen you are on.
 
+Settings live in `settings.ini` in `%APPDATA%/Adolanium/BlackthorneReborn`,
+written on first run. Keys can be remapped there with SDL key names, and
+several keys can share an action, for example `key.jump=Space,Left Ctrl`.
+
 Options are `blackthorne [DATA.DAT] [--filter 0-3] [--wide 0|1] [--level hex]`. `--level`
 starts a level directly, for example `--level C1`.
 

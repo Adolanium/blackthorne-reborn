@@ -137,25 +137,41 @@ private:
     std::vector<SDL_FRect> rects_;
 };
 
-std::uint16_t read_controls() {
+// Keyboard bindings: settings.ini can override them with lines such as
+// "key.jump=Space,Left Ctrl" (SDL key names, several keys per action).
+struct Binding {
+    const char* name;
+    std::uint16_t bit;
+    std::vector<SDL_Scancode> keys;
+};
+
+std::vector<Binding> default_bindings() {
     using G = bt::Game;
+    return {
+        {"left", G::kLeft, {SDL_SCANCODE_LEFT}},
+        {"right", G::kRight, {SDL_SCANCODE_RIGHT}},
+        {"up", G::kUp, {SDL_SCANCODE_UP}},
+        {"down", G::kDown, {SDL_SCANCODE_DOWN}},
+        {"fire", G::kFire, {SDL_SCANCODE_F}},
+        {"shoot_back", G::kShootBack, {SDL_SCANCODE_R}},
+        {"jump", G::kJump, {SDL_SCANCODE_SPACE}},
+        {"run", G::kRun, {SDL_SCANCODE_D}},
+        {"gun", G::kGun, {SDL_SCANCODE_S}},
+        {"use_item", G::kUseItem, {SDL_SCANCODE_E}},
+        {"item_prev", G::kItemPrev, {SDL_SCANCODE_LEFTBRACKET}},
+        {"item_next", G::kItemNext, {SDL_SCANCODE_RIGHTBRACKET}},
+        {"enter", G::kEnter, {SDL_SCANCODE_RETURN}},
+        {"menu", G::kEscape, {SDL_SCANCODE_ESCAPE}},
+        {"give_up", G::kPause, {SDL_SCANCODE_P}},
+    };
+}
+
+std::uint16_t read_controls(const std::vector<Binding>& bindings) {
     const bool* k = SDL_GetKeyboardState(nullptr);
     std::uint16_t bits = 0;
-    if (k[SDL_SCANCODE_LEFT]) bits |= G::kLeft;
-    if (k[SDL_SCANCODE_RIGHT]) bits |= G::kRight;
-    if (k[SDL_SCANCODE_UP]) bits |= G::kUp;
-    if (k[SDL_SCANCODE_DOWN]) bits |= G::kDown;
-    if (k[SDL_SCANCODE_F]) bits |= G::kFire;
-    if (k[SDL_SCANCODE_R]) bits |= G::kShootBack;
-    if (k[SDL_SCANCODE_SPACE]) bits |= G::kJump;
-    if (k[SDL_SCANCODE_D]) bits |= G::kRun;
-    if (k[SDL_SCANCODE_S]) bits |= G::kGun;
-    if (k[SDL_SCANCODE_E]) bits |= G::kUseItem;
-    if (k[SDL_SCANCODE_LEFTBRACKET]) bits |= G::kItemPrev;
-    if (k[SDL_SCANCODE_RIGHTBRACKET]) bits |= G::kItemNext;
-    if (k[SDL_SCANCODE_RETURN]) bits |= G::kEnter;
-    if (k[SDL_SCANCODE_ESCAPE]) bits |= G::kEscape;
-    if (k[SDL_SCANCODE_P]) bits |= G::kPause;
+    for (const Binding& b : bindings)
+        for (SDL_Scancode key : b.keys)
+            if (k[key]) bits |= b.bit;
     return bits;
 }
 
@@ -167,6 +183,7 @@ void fail(const std::string& message) {
 struct Settings {
     Filter filter = Filter::Sharp;
     bool wide = false;
+    std::vector<Binding> bindings = default_bindings();
 };
 
 Settings load_settings(const std::filesystem::path& path) {
@@ -178,13 +195,33 @@ Settings load_settings(const std::filesystem::path& path) {
             if (f >= 0 && f < static_cast<int>(Filter::Count)) s.filter = static_cast<Filter>(f);
         } else if (line.rfind("widescreen=", 0) == 0) {
             s.wide = std::atoi(line.c_str() + 11) != 0;
+        } else if (line.rfind("key.", 0) == 0 && line.find('=') != std::string::npos) {
+            const std::string name = line.substr(4, line.find('=') - 4);
+            for (Binding& b : s.bindings) {
+                if (name != b.name) continue;
+                std::vector<SDL_Scancode> keys;
+                std::string list = line.substr(line.find('=') + 1);
+                for (std::size_t pos = 0; pos <= list.size();) {
+                    const std::size_t comma = std::min(list.find(',', pos), list.size());
+                    const SDL_Scancode sc = SDL_GetScancodeFromName(list.substr(pos, comma - pos).c_str());
+                    if (sc != SDL_SCANCODE_UNKNOWN) keys.push_back(sc);
+                    pos = comma + 1;
+                }
+                if (!keys.empty()) b.keys = keys;
+            }
         }
     }
     return s;
 }
 
 void save_settings(const std::filesystem::path& path, const Settings& s) {
-    std::ofstream(path) << "filter=" << static_cast<int>(s.filter) << "\nwidescreen=" << (s.wide ? 1 : 0) << '\n';
+    std::ofstream out(path);
+    out << "filter=" << static_cast<int>(s.filter) << "\nwidescreen=" << (s.wide ? 1 : 0) << '\n';
+    for (const Binding& b : s.bindings) {
+        out << "key." << b.name << '=';
+        for (std::size_t i = 0; i < b.keys.size(); ++i) out << (i ? "," : "") << SDL_GetScancodeName(b.keys[i]);
+        out << '\n';
+    }
 }
 
 }  // namespace
@@ -264,6 +301,8 @@ int main(int argc, char** argv) {
         SDL_Quit();
         return ok ? 0 : 1;
     }
+    // Write the file on first run so the bindings are easy to find and edit.
+    if (!std::filesystem::exists(settings_path)) save_settings(settings_path, settings);
 
     bt::Image frame;
     double acc = 0;
@@ -306,7 +345,7 @@ int main(int argc, char** argv) {
         last = now;
         for (int steps = 0; acc >= kTickSeconds && steps < 5; ++steps) {
             acc -= kTickSeconds;
-            game->set_input(static_cast<std::uint16_t>(read_controls() | read_gamepad(pad)));
+            game->set_input(static_cast<std::uint16_t>(read_controls(settings.bindings) | read_gamepad(pad)));
             try {
                 game->tick();
             } catch (const std::exception& ex) {
