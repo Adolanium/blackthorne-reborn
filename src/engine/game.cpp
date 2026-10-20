@@ -75,6 +75,9 @@ void Game::load_level(int level_id, int x, int y) {
         ds.set_field(0x18EA, s, 0xFFFF);
     }
 
+    // loc_15C36 (with the font load): the text layer starts empty.
+    for (int i = 0; i < 0x380; ++i) ds.set_u16(static_cast<std::uint16_t>(0x2D08 + 2 * i), 0x20);
+
     // The shown palette starts as the untinted base palette.
     for (int i = 0; i < 768; ++i) ds.set_u8(static_cast<std::uint16_t>(kShownPalette + i), ds.u8(static_cast<std::uint16_t>(kBasePalette + i)));
 

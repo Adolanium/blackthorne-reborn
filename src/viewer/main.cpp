@@ -17,6 +17,8 @@
 #include "data/archive.h"
 #include "data/level.h"
 #include "data/sprites.h"
+#include "engine/game.h"
+#include "render/renderer.h"
 
 namespace {
 
@@ -43,7 +45,8 @@ std::uint32_t argb(const bt::Rgb& c) {
 
 class Viewer {
 public:
-    Viewer(SDL_Renderer* r, const bt::Archive& a) : renderer_(r), archive_(a) { load(0); }
+    Viewer(SDL_Renderer* r, const bt::Archive& a, std::filesystem::path exe)
+        : renderer_(r), archive_(a), exe_path_(std::move(exe)), game_renderer_(a) { load(0); }
 
     void handle(const SDL_Event& e) {
         if (e.type == SDL_EVENT_KEY_DOWN) {
@@ -55,6 +58,7 @@ public:
                 case SDLK_TAB: sprite_mode_ = !sprite_mode_; break;
                 case SDLK_C: show_collision_ = !show_collision_; break;
                 case SDLK_O: show_objects_ = !show_objects_; break;
+                case SDLK_P: toggle_play(); break;
                 case SDLK_RIGHT: if (sprite_mode_) select_bank(bank_ + 1); break;
                 case SDLK_LEFT: if (sprite_mode_) select_bank(bank_ - 1); break;
                 default: break;
@@ -68,6 +72,22 @@ public:
     }
 
     void update(float dt) {
+        if (game_) {
+            tick_acc_ += dt;
+            int steps = 0;
+            while (tick_acc_ >= 1.0f / 30.0f && steps++ < 4) {
+                tick_acc_ -= 1.0f / 30.0f;
+                try {
+                    game_->tick();
+                } catch (const std::exception& ex) {
+                    play_error_ = ex.what();
+                    game_.reset();
+                    return;
+                }
+                ++ticks_;
+            }
+            return;
+        }
         if (sprite_mode_) return;
         const bool* keys = SDL_GetKeyboardState(nullptr);
         const float speed = 600.0f * dt / zoom_;
@@ -94,13 +114,58 @@ public:
         SDL_RenderClear(renderer_);
         int ww, wh;
         SDL_GetCurrentRenderOutputSize(renderer_, &ww, &wh);
-        if (sprite_mode_) draw_sprites(ww); else draw_map(ww, wh);
+        if (game_) draw_game(ww, wh);
+        else if (sprite_mode_) draw_sprites(ww);
+        else draw_map(ww, wh);
         draw_hud();
         if (present) SDL_RenderPresent(renderer_);
     }
 
+    // Starts the current level in the engine (play mode), Kyle at the level's
+    // password-table start position when it has one.
+    void toggle_play() {
+        if (game_) {
+            game_.reset();
+            return;
+        }
+        play_error_.clear();
+        try {
+            const int level_id = level_.descriptor_entry + 1;
+            game_ = std::make_unique<bt::Game>(archive_, exe_path_);
+            int x = level_.objects.empty() ? 128 : level_.objects[0].x;
+            int y = level_.objects.empty() ? 112 : level_.objects[0].y;
+            const bt::DataSegment& ds = game_->machine().ds;
+            for (std::uint16_t e = 0x543A; ds.u16(e) != 0xFFFF; e = static_cast<std::uint16_t>(e + 10))
+                if (ds.u16(e) == level_id) {
+                    x = ds.u16(static_cast<std::uint16_t>(e + 2));
+                    y = ds.u16(static_cast<std::uint16_t>(e + 4));
+                    break;
+                }
+            game_->load_level(level_id, x, y);
+            ticks_ = 0;
+            tick_acc_ = 0;
+        } catch (const std::exception& ex) {
+            play_error_ = ex.what();
+            game_.reset();
+        }
+    }
+
+    void draw_game(int ww, int wh) {
+        game_renderer_.render(*game_, frame_);
+        if (!play_tex_) {
+            play_tex_.reset(SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, frame_.width, frame_.height));
+            SDL_SetTextureScaleMode(play_tex_.get(), SDL_SCALEMODE_NEAREST);
+        }
+        SDL_UpdateTexture(play_tex_.get(), nullptr, frame_.pixels.data(), frame_.width * 4);
+        const int scale = std::max(1, std::min((ww) / frame_.width, (wh - 24) / frame_.height));
+        const SDL_FRect dst{static_cast<float>((ww - frame_.width * scale) / 2), 24.0f,
+                            static_cast<float>(frame_.width * scale), static_cast<float>(frame_.height * scale)};
+        SDL_RenderTexture(renderer_, play_tex_.get(), nullptr, &dst);
+    }
+
 private:
     void load(int index) {
+        game_.reset();
         level_index_ = index;
         level_ = bt::load_level(archive_, bt::kLevelDescriptors[index]);
         rebuild_map();
@@ -232,7 +297,13 @@ private:
 
     void draw_hud() {
         char line[256];
-        if (sprite_mode_) {
+        if (game_) {
+            const bt::DataSegment& ds = game_->machine().ds;
+            std::snprintf(line, sizeof line, "PLAY level %d  tick %d  Kyle (%d,%d)  actors %d  [P] stop",
+                          level_index_ + 1, ticks_, ds.field(bt::field::kX, 0), ds.field(bt::field::kY, 0), ds.u16(0x32C) / 2);
+        } else if (!play_error_.empty()) {
+            std::snprintf(line, sizeof line, "engine stopped: %s", play_error_.c_str());
+        } else if (sprite_mode_) {
             const auto& b = level_.sprite_banks[bank_];
             std::snprintf(line, sizeof line, "Level %d  sprite bank %d/%zu  entry %d  %dx%d  %d frames   [<-/->] bank  [Tab] map",
                           level_index_ + 1, bank_ + 1, level_.sprite_banks.size(), b.entry, b.width, b.height, frame_count_);
@@ -252,6 +323,14 @@ private:
 
     SDL_Renderer* renderer_;
     const bt::Archive& archive_;
+    std::filesystem::path exe_path_;
+    bt::Renderer game_renderer_;
+    std::unique_ptr<bt::Game> game_;
+    bt::Image frame_;
+    Texture play_tex_;
+    float tick_acc_ = 0;
+    int ticks_ = 0;
+    std::string play_error_;
     std::vector<bt::ActorType> actor_types_ = bt::load_actor_types(archive_);
     bt::Level level_;
     int level_index_ = 0;
@@ -272,7 +351,8 @@ int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
     std::string shot;
     int start_level = 0, start_bank = 0;
-    bool start_sprites = false, start_collision = false, start_objects = false;
+    bool start_sprites = false, start_collision = false, start_objects = false, start_play = false;
+    int start_ticks = 0;
     float start_x = 0, start_y = 0;
     int start_zoom = 3;
     for (int i = 1; i < argc; ++i) {
@@ -281,6 +361,8 @@ int main(int argc, char** argv) {
         else if (a == "--bank" && i + 1 < argc) start_bank = std::atoi(argv[++i]) - 1;
         else if (a == "--sprites") start_sprites = true;
         else if (a == "--collision") start_collision = true;
+        else if (a == "--play") start_play = true;
+        else if (a == "--ticks" && i + 1 < argc) start_ticks = std::atoi(argv[++i]);
         else if (a == "--objects") start_objects = true;
         else if (a == "--zoom" && i + 1 < argc) start_zoom = std::clamp(std::atoi(argv[++i]), 1, 8);
         else if (a == "--x" && i + 1 < argc) start_x = static_cast<float>(std::atof(argv[++i]));
@@ -306,8 +388,12 @@ int main(int argc, char** argv) {
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
     {
-        Viewer viewer(renderer, *archive);
+        Viewer viewer(renderer, *archive, data_path.parent_path() / "BTHORNE.EXE");
         viewer.open(start_level, start_sprites, start_bank, start_collision, start_objects, start_x, start_y, start_zoom);
+        if (start_play) {
+            viewer.toggle_play();
+            for (int t = 0; t < start_ticks; ++t) viewer.update(1.0f / 30.0f);
+        }
         if (!shot.empty()) {
             // Render one frame to a file instead of running interactively.
             viewer.draw(false);

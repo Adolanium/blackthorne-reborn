@@ -35,8 +35,11 @@ add_library(btengine STATIC
 )
 target_link_libraries(btengine PUBLIC btdata)
 
+add_library(btrender STATIC src/render/renderer.cpp)
+target_link_libraries(btrender PUBLIC btengine)
+
 add_executable(btviewer src/viewer/main.cpp)
-target_link_libraries(btviewer PRIVATE btdata SDL3::SDL3-static)
+target_link_libraries(btviewer PRIVATE btrender SDL3::SDL3-static)
 
 if(MSVC)
     target_compile_options(btdata PRIVATE /W4 /permissive-)
