@@ -89,6 +89,17 @@ void Game::load_state(const std::filesystem::path& path) {
     *machine_ = std::move(*machine);
 }
 
+void Game::start_level(int level_id) {
+    const DataSegment& ds = machine_->ds;
+    for (std::uint16_t e = 0x543A; ds.u16(e) != 0xFFFF; e = static_cast<std::uint16_t>(e + 10))
+        if (ds.u16(e) == level_id) {
+            load_level(level_id, ds.u16(static_cast<std::uint16_t>(e + 2)), ds.u16(static_cast<std::uint16_t>(e + 4)));
+            return;
+        }
+    const Level lv = bt::load_level(archive_, level_id - 1);
+    load_level(level_id, lv.objects.empty() ? 128 : lv.objects[0].x, lv.objects.empty() ? 112 : lv.objects[0].y);
+}
+
 void Game::boot() {
     DataSegment& ds = machine_->ds;
     // sub_10D0D: the settings block (DATA.DAT entry 0) goes to ds:25E6h.

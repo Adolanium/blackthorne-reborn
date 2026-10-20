@@ -5,13 +5,19 @@
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "audio/audio.h"
 #include "data/archive.h"
 #include "engine/game.h"
+#include "render/filters.h"
 #include "render/renderer.h"
 
 namespace {
@@ -46,6 +52,91 @@ std::uint16_t read_gamepad(SDL_Gamepad* pad) {
     return bits;
 }
 
+// How the 320x240 frame reaches the window (F8 cycles).
+enum class Filter { Sharp, Pixel, Smooth, Crt, Count };
+constexpr const char* kFilterNames[] = {"sharp", "pixel perfect", "smooth (Scale4x)", "CRT"};
+
+// Draws the frame into the window. Sharp and CRT upscale by the largest whole
+// factor with nearest-neighbour and cover the rest with linear filtering, so
+// the picture fills the window without uneven pixels or blur; Pixel uses only
+// whole factors; Smooth runs Scale2x twice first.
+class Display {
+public:
+    explicit Display(SDL_Renderer* sdl) : sdl_(sdl) {}
+    ~Display() {
+        for (SDL_Texture* t : {source_, prescaled_}) if (t) SDL_DestroyTexture(t);
+    }
+    Filter filter = Filter::Sharp;
+
+    void present(const bt::Image& frame, bool flip = true) {
+        const bt::Image* image = &frame;
+        if (filter == Filter::Smooth) {
+            bt::scale2x(frame, x2_);
+            bt::scale2x(x2_, x4_);
+            image = &x4_;
+        }
+        source_ = fit(source_, image->width, image->height, SDL_TEXTUREACCESS_STREAMING);
+        SDL_UpdateTexture(source_, nullptr, image->pixels.data(), image->width * 4);
+
+        int ww = 0, wh = 0;
+        SDL_GetCurrentRenderOutputSize(sdl_, &ww, &wh);
+        const int whole = std::max(1, std::min(ww / frame.width, wh / frame.height));
+        SDL_FRect dst;
+        if (filter == Filter::Pixel) {
+            dst = {static_cast<float>((ww - frame.width * whole) / 2), static_cast<float>((wh - frame.height * whole) / 2),
+                   static_cast<float>(frame.width * whole), static_cast<float>(frame.height * whole)};
+        } else {
+            const float s = std::min(static_cast<float>(ww) / frame.width, static_cast<float>(wh) / frame.height);
+            dst = {std::floor((ww - frame.width * s) / 2), std::floor((wh - frame.height * s) / 2), std::floor(frame.width * s),
+                   std::floor(frame.height * s)};
+        }
+        SDL_Texture* shown = source_;
+        if (filter == Filter::Smooth) {
+            SDL_SetTextureScaleMode(source_, SDL_SCALEMODE_LINEAR);
+        } else if (filter == Filter::Pixel) {
+            SDL_SetTextureScaleMode(source_, SDL_SCALEMODE_NEAREST);
+        } else {
+            SDL_SetTextureScaleMode(source_, SDL_SCALEMODE_NEAREST);
+            prescaled_ = fit(prescaled_, frame.width * whole, frame.height * whole, SDL_TEXTUREACCESS_TARGET);
+            SDL_SetTextureScaleMode(prescaled_, SDL_SCALEMODE_LINEAR);
+            SDL_SetRenderTarget(sdl_, prescaled_);
+            SDL_RenderTexture(sdl_, source_, nullptr, nullptr);
+            SDL_SetRenderTarget(sdl_, nullptr);
+            shown = prescaled_;
+        }
+        SDL_SetRenderDrawColor(sdl_, 0, 0, 0, 255);
+        SDL_RenderClear(sdl_);
+        SDL_RenderTexture(sdl_, shown, nullptr, &dst);
+        if (filter == Filter::Crt) scanlines(dst, frame.height);
+        if (flip) SDL_RenderPresent(sdl_);
+    }
+
+private:
+    SDL_Texture* fit(SDL_Texture* t, int w, int h, SDL_TextureAccess access) {
+        if (t && t->w == w && t->h == h) return t;
+        if (t) SDL_DestroyTexture(t);
+        return SDL_CreateTexture(sdl_, SDL_PIXELFORMAT_ARGB8888, access, w, h);
+    }
+    // Darken the lower part of every source row, like the gaps between the
+    // beam lines of a CRT; skipped when rows are too small to show them.
+    void scanlines(const SDL_FRect& dst, int rows) {
+        const float row = dst.h / static_cast<float>(rows);
+        if (row < 2.5f) return;
+        rects_.clear();
+        for (int y = 0; y < rows; ++y)
+            rects_.push_back({dst.x, dst.y + y * row + row * 0.6f, dst.w, row * 0.4f});
+        SDL_SetRenderDrawBlendMode(sdl_, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(sdl_, 0, 0, 0, 110);
+        SDL_RenderFillRects(sdl_, rects_.data(), static_cast<int>(rects_.size()));
+    }
+
+    SDL_Renderer* sdl_;
+    SDL_Texture* source_ = nullptr;
+    SDL_Texture* prescaled_ = nullptr;
+    bt::Image x2_, x4_;
+    std::vector<SDL_FRect> rects_;
+};
+
 std::uint16_t read_controls() {
     using G = bt::Game;
     const bool* k = SDL_GetKeyboardState(nullptr);
@@ -72,16 +163,51 @@ void fail(const std::string& message) {
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Blackthorne Reborn", message.c_str(), nullptr);
 }
 
+// settings.ini in the user's preference folder: one "key=value" per line.
+Filter load_filter(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    for (std::string line; std::getline(in, line);)
+        if (line.rfind("filter=", 0) == 0) {
+            const int f = std::atoi(line.c_str() + 7);
+            if (f >= 0 && f < static_cast<int>(Filter::Count)) return static_cast<Filter>(f);
+        }
+    return Filter::Sharp;
+}
+
+void save_filter(const std::filesystem::path& path, Filter filter) {
+    std::ofstream(path) << "filter=" << static_cast<int>(filter) << '\n';
+}
+
 }  // namespace
 
+// blackthorne [DATA.DAT] [--filter 0-3] [--level hex] [--size WxH --ticks N --shot out.bmp]
+// The last three render one frame after N ticks to a BMP and exit (for tests).
 int main(int argc, char** argv) {
-    const std::filesystem::path data_path = argc > 1 ? argv[1] : kDefaultData;
+    std::filesystem::path data_path = kDefaultData;
+    int filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
+    std::string shot;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        const char* next = i + 1 < argc ? argv[i + 1] : "";
+        if (a == "--filter") filter_arg = std::atoi(next), ++i;
+        else if (a == "--level") level_arg = static_cast<int>(std::strtol(next, nullptr, 16)), ++i;
+        else if (a == "--ticks") ticks_arg = std::atoi(next), ++i;
+        else if (a == "--shot") shot = next, ++i;
+        else if (a == "--size") {
+            char* end = nullptr;
+            width = static_cast<int>(std::strtol(next, &end, 10));
+            height = *end == 'x' ? std::atoi(end + 1) : height;
+            ++i;
+        }
+        else data_path = a;
+    }
     std::unique_ptr<bt::Archive> archive;
     std::unique_ptr<bt::Game> game;
     try {
         archive = std::make_unique<bt::Archive>(data_path);
         game = std::make_unique<bt::Game>(*archive, data_path.parent_path() / "BTHORNE.EXE");
         game->boot();
+        if (level_arg) game->start_level(level_arg);
     } catch (const std::exception& ex) {
         fail(std::string(ex.what()) + "\n\nUsage: blackthorne <path to BTHORNE/DATA.DAT>");
         return 1;
@@ -94,18 +220,36 @@ int main(int argc, char** argv) {
     SDL_Gamepad* pad = nullptr;
     const char* pref = SDL_GetPrefPath("Adolanium", "BlackthorneReborn");
     const std::filesystem::path save_path = std::filesystem::path(pref ? pref : "") / "quicksave.bts";
+    const std::filesystem::path settings_path = std::filesystem::path(pref ? pref : "") / "settings.ini";
     SDL_free(const_cast<char*>(pref));
     SDL_Window* window = nullptr;
     SDL_Renderer* sdl = nullptr;
-    if (!SDL_CreateWindowAndRenderer("Blackthorne Reborn", bt::Renderer::kScreenWidth * 4, bt::Renderer::kScreenHeight * 4,
-                                     SDL_WINDOW_RESIZABLE, &window, &sdl))
+    if (!SDL_CreateWindowAndRenderer("Blackthorne Reborn", width, height,
+                                     shot.empty() ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_HIDDEN, &window, &sdl))
         return 1;
     SDL_SetRenderVSync(sdl, 1);
     audio.open();  // the game runs silently if there is no audio device
     if (music.open()) audio.music = &music;
-    SDL_Texture* tex = SDL_CreateTexture(sdl, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
-                                         bt::Renderer::kScreenWidth, bt::Renderer::kScreenHeight);
-    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+    auto display = std::make_unique<Display>(sdl);
+    display->filter = filter_arg >= 0 && filter_arg < static_cast<int>(Filter::Count) ? static_cast<Filter>(filter_arg)
+                                                                                         : load_filter(settings_path);
+    if (!shot.empty()) {
+        bt::Image frame;
+        for (int t = 0; t < ticks_arg; ++t) {
+            game->tick();
+            game->vm().events().clear();
+        }
+        renderer.render_screen(*game, frame);
+        display->present(frame, false);
+        SDL_Surface* pixels = SDL_RenderReadPixels(sdl, nullptr);
+        const bool ok = pixels && SDL_SaveBMP(pixels, shot.c_str());
+        SDL_DestroySurface(pixels);
+        display.reset();
+        SDL_DestroyRenderer(sdl);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return ok ? 0 : 1;
+    }
 
     bt::Image frame;
     double acc = 0;
@@ -116,6 +260,11 @@ int main(int argc, char** argv) {
             if (e.type == SDL_EVENT_QUIT) running = false;
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_F11)
                 SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+            if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_F8) {
+                display->filter = static_cast<Filter>((static_cast<int>(display->filter) + 1) % static_cast<int>(Filter::Count));
+                save_filter(settings_path, display->filter);
+                SDL_SetWindowTitle(window, (std::string("Blackthorne Reborn - ") + kFilterNames[static_cast<int>(display->filter)]).c_str());
+            }
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !pad) pad = SDL_OpenGamepad(e.gdevice.which);
             if (e.type == SDL_EVENT_GAMEPAD_REMOVED && pad && SDL_GetGamepadID(pad) == e.gdevice.which) {
                 SDL_CloseGamepad(pad);
@@ -153,19 +302,10 @@ int main(int argc, char** argv) {
         if (acc > kTickSeconds * 5) acc = 0;  // don't spiral after a stall
 
         renderer.render_screen(*game, frame);
-        SDL_UpdateTexture(tex, nullptr, frame.pixels.data(), frame.width * 4);
-        int ww = 0, wh = 0;
-        SDL_GetCurrentRenderOutputSize(sdl, &ww, &wh);
-        const int scale = std::max(1, std::min(ww / frame.width, wh / frame.height));
-        const SDL_FRect dst{static_cast<float>((ww - frame.width * scale) / 2), static_cast<float>((wh - frame.height * scale) / 2),
-                            static_cast<float>(frame.width * scale), static_cast<float>(frame.height * scale)};
-        SDL_SetRenderDrawColor(sdl, 0, 0, 0, 255);
-        SDL_RenderClear(sdl);
-        SDL_RenderTexture(sdl, tex, nullptr, &dst);
-        SDL_RenderPresent(sdl);
+        display->present(frame);
     }
     if (pad) SDL_CloseGamepad(pad);
-    SDL_DestroyTexture(tex);
+    display.reset();
     SDL_DestroyRenderer(sdl);
     SDL_DestroyWindow(window);
     SDL_Quit();

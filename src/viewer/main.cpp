@@ -160,16 +160,7 @@ public:
             }
             const int level_id = level_.descriptor_entry + 1;
             game_ = std::make_unique<bt::Game>(archive_, exe_path_);
-            int x = level_.objects.empty() ? 128 : level_.objects[0].x;
-            int y = level_.objects.empty() ? 112 : level_.objects[0].y;
-            const bt::DataSegment& ds = game_->machine().ds;
-            for (std::uint16_t e = 0x543A; ds.u16(e) != 0xFFFF; e = static_cast<std::uint16_t>(e + 10))
-                if (ds.u16(e) == level_id) {
-                    x = ds.u16(static_cast<std::uint16_t>(e + 2));
-                    y = ds.u16(static_cast<std::uint16_t>(e + 4));
-                    break;
-                }
-            game_->load_level(level_id, x, y);
+            game_->start_level(level_id);
             ticks_ = 0;
             tick_acc_ = 0;
         } catch (const std::exception& ex) {

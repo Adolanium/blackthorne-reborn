@@ -23,6 +23,8 @@ public:
     // Loads level `level_id` (1-based resource id of its descriptor, e.g. 0xC0
     // for the first level) with Kyle starting at (x, y).
     void load_level(int level_id, int x, int y);
+    // Loads a level at its password-table start, else at its first object.
+    void start_level(int level_id);
 
     // Input bits as the keyboard handler builds them (ds:2A82h).
     enum Input : std::uint16_t {

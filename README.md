@@ -52,6 +52,17 @@ Space jumps, D runs, S draws/holsters the gun, E uses an item, [ and ] cycle
 the inventory, Enter confirms, Esc opens the menu, P asks to give up. F11
 toggles fullscreen, F5 quick-saves and F9 quick-loads.
 
+F8 cycles the display filter, and the choice is remembered:
+
+- **Sharp** (default) fills the window. Pixels are scaled by whole numbers
+  first, so only the last fraction is blended.
+- **Pixel perfect** uses whole-number scaling only.
+- **Smooth** runs Scale2x twice to round off the pixel staircases.
+- **CRT** adds scanlines.
+
+Options are `blackthorne [DATA.DAT] [--filter 0-3] [--level hex]`. `--level`
+starts a level directly, for example `--level C1`.
+
 Gamepads work too: d-pad or left stick to move, A jump, X fire, Y draw or
 holster, B use item, LB/RB cycle items, RT run, LT shoot backward, Start
 confirms and Back opens the menu.

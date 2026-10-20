@@ -25,27 +25,11 @@ int main(int argc, char** argv) {
     for (int d : bt::kLevelDescriptors) {
         const int level = d + 1;
         bt::Game game(archive, data.parent_path() / "BTHORNE.EXE");
-        // Start position from the password table, else the level's first record.
-        int x = 128, y = 112;
         const auto& ds = game.machine().ds;
-        bool found = false;
-        for (std::uint16_t e = 0x543A; ds.u16(e) != 0xFFFF; e = static_cast<std::uint16_t>(e + 10))
-            if (ds.u16(e) == level) {
-                x = ds.u16(static_cast<std::uint16_t>(e + 2));
-                y = ds.u16(static_cast<std::uint16_t>(e + 4));
-                found = true;
-            }
-        if (!found) {
-            const bt::Level lv = bt::load_level(archive, d);
-            if (!lv.objects.empty()) {
-                x = lv.objects[0].x;
-                y = lv.objects[0].y;
-            }
-        }
         std::mt19937 rng(seed + static_cast<unsigned>(level));
         int t = 0;
         try {
-            game.load_level(level, x, y);
+            game.start_level(level);
             std::uint16_t held = 0;
             for (; t < ticks; ++t) {
                 if (t % 20 == 0) held = static_cast<std::uint16_t>(rng() & 0x07FC);  // movement and actions, no menus

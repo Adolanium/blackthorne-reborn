@@ -35,7 +35,7 @@ add_library(btengine STATIC
 )
 target_link_libraries(btengine PUBLIC btdata)
 
-add_library(btrender STATIC src/render/renderer.cpp)
+add_library(btrender STATIC src/render/renderer.cpp src/render/filters.cpp)
 target_link_libraries(btrender PUBLIC btengine)
 
 add_library(btaudio STATIC src/audio/audio.cpp src/audio/music.cpp)
