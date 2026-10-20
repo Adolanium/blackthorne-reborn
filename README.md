@@ -49,7 +49,9 @@ Boots the original game flow (logos, menu, intro, levels) on the new engine.
 Controls are the original ones: arrows move, F fires, R shoots backward,
 Space jumps, D runs, S draws/holsters the gun, E uses an item, [ and ] cycle
 the inventory, Enter confirms, Esc opens the menu. F11 toggles fullscreen.
-Sound, music and the HUD are not implemented yet.
+Sound effects play through SDL; music and MIDI effects use the General MIDI
+versions of the songs on the system MIDI synthesizer (Windows), as Blizzard's
+2013 release did. The HUD is not implemented yet.
 
 ## Level viewer
 

@@ -38,8 +38,11 @@ target_link_libraries(btengine PUBLIC btdata)
 add_library(btrender STATIC src/render/renderer.cpp)
 target_link_libraries(btrender PUBLIC btengine)
 
-add_library(btaudio STATIC src/audio/audio.cpp)
+add_library(btaudio STATIC src/audio/audio.cpp src/audio/music.cpp)
 target_link_libraries(btaudio PUBLIC btengine SDL3::SDL3-static)
+if(WIN32)
+    target_link_libraries(btaudio PUBLIC winmm)
+endif()
 
 add_executable(blackthorne WIN32 src/game/main.cpp)
 target_link_libraries(blackthorne PRIVATE btrender btaudio SDL3::SDL3-static)

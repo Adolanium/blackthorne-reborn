@@ -6,6 +6,7 @@
 #include "data/archive.h"
 #include "engine/data_segment.h"
 #include "engine/vm.h"
+#include "audio/music.h"
 
 struct SDL_AudioStream;
 
@@ -30,6 +31,9 @@ public:
     Audio& operator=(const Audio&) = delete;
 
     bool open();  // opens the default playback device; false if unavailable
+
+    // MIDI music and effects (optional).
+    Music* music = nullptr;
 
     // Acts on VM sound events, resolving ids through the game's tables
     // (sub_11D2E: ds:2964h maps a sound id to a sample or a MIDI effect).

@@ -61,6 +61,7 @@ int main(int argc, char** argv) {
     }
     const bt::Renderer renderer(*archive);
     bt::Audio audio(*archive);
+    bt::Music music(*archive);
 
     if (!SDL_Init(SDL_INIT_VIDEO)) return 1;
     SDL_Window* window = nullptr;
@@ -70,6 +71,7 @@ int main(int argc, char** argv) {
         return 1;
     SDL_SetRenderVSync(sdl, 1);
     audio.open();  // the game runs silently if there is no audio device
+    if (music.open()) audio.music = &music;
     SDL_Texture* tex = SDL_CreateTexture(sdl, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
                                          bt::Renderer::kWidth, bt::Renderer::kHeight);
     SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);

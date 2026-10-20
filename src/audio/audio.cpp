@@ -59,11 +59,23 @@ bool Audio::open() {
 }
 
 void Audio::handle(const VmEvent& event, const DataSegment& ds) {
+    if (music) {
+        switch (event.kind) {
+            case VmEvent::Kind::MusicLoad: music->load(event.id); return;
+            case VmEvent::Kind::MusicStart: music->start(); return;
+            case VmEvent::Kind::MusicRestart: if (ds.u16(0x37E)) music->start(); return;  // F4
+            case VmEvent::Kind::MusicStop: music->stop(); return;
+            default: break;
+        }
+    }
     if (event.kind != VmEvent::Kind::PlaySound && event.kind != VmEvent::Kind::StopSound) return;
     if (!ds.u16(kSoundOn)) return;
     const std::uint16_t v = ds.u16(static_cast<std::uint16_t>(kSoundTable + (event.id - 0x80) * 2));
     if (v == kNoSound || v == 0xFFFF) return;
-    if (!(v & 0x8000)) return;  // MIDI sound effect through the music driver: not yet
+    if (!(v & 0x8000)) {  // sub_197EA: an effect sequence played by the music driver
+        if (music && event.kind == VmEvent::Kind::PlaySound) music->play_effect(v);
+        return;
+    }
     if (event.kind == VmEvent::Kind::PlaySound) play_sample(v & 0xFFF);
     else stop_sample(v & 0xFFF);
 }

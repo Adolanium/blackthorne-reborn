@@ -121,8 +121,39 @@ void Game::load_level(int level_id, int x, int y) {
 
     set_camera_bounds();
     place_camera();
+    music_action();
     spawn_start_records();
     vm_->spawn_visible_records();
+}
+
+// sub_11C64: header byte 4 picks what happens to the music; byte 5 is the song.
+// 0 = play the song (sub_11CC2), 1 = keep, 2 = stop (sub_11CF6), 3 = load only.
+void Game::music_action() {
+    DataSegment& ds = machine_->ds;
+    auto& ev = vm_->events();
+    const int action = ds.u8(0x1CF2), song = ds.u8(0x1CF3);
+    auto load = [&] {  // sub_11C77
+        if (song == ds.u16(0x386)) return;
+        ds.set_u16(0x386, static_cast<std::uint16_t>(song));
+        ds.set_u16(0x38E, 0);
+        ev.push_back({VmEvent::Kind::MusicLoad, song});
+    };
+    switch (action) {
+        case 0:
+            load();
+            if (ds.u16(0x37E) && (song != ds.u16(0x38A) || ds.u16(0x38E) == 0)) {
+                ds.set_u16(0x38A, static_cast<std::uint16_t>(song));
+                ev.push_back({VmEvent::Kind::MusicStart, song});
+                ds.set_u16(0x38E, 1);
+            }
+            break;
+        case 2:
+            ev.push_back({VmEvent::Kind::MusicStop, 0});
+            ds.set_u16(0x38E, 0);
+            break;
+        case 3: load(); break;
+        default: break;
+    }
 }
 
 // Walks the descriptor body in the order of sub_105B4's helpers, filling the

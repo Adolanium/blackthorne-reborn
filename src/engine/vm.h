@@ -58,7 +58,7 @@ constexpr std::uint16_t kFacing = 0x40;  // selects add/sub direction and probe 
 
 // Something the VM asks the host to do (sound, saving, quitting).
 struct VmEvent {
-    enum class Kind { PlaySound, StopSound, MusicRestart, MusicStop, SavePassword, Quit };
+    enum class Kind { PlaySound, StopSound, MusicLoad, MusicStart, MusicRestart, MusicStop, SavePassword, Quit };
     Kind kind;
     int id;
 };

@@ -57,6 +57,7 @@ private:
     void spawn_start_records();    // sub_11442
     void main_loop_actors();       // the actor part of sub_10043
     void change_level();           // sub_1011B, level-exit branch
+    void music_action();           // sub_11C64: the header's music action
 
     const Archive& archive_;
     std::unique_ptr<Machine> machine_;
