@@ -129,3 +129,10 @@ python -I tools/datdump.py "<game dir>/BTHORNE/DATA.DAT" extracted
 ```
 python -I tools/sprites.py extracted out/sprites
 ```
+
+## License
+
+The source code is released under the [MIT License](LICENSE). It covers this
+project's code only: Blackthorne's game data, graphics, sound and music
+belong to Blizzard Entertainment and are not included or licensed here. The
+bundled GeneralUser GS SoundFont has its own license.
