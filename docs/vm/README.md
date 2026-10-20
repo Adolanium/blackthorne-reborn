@@ -52,10 +52,10 @@ internal (negative k).
 | 15A2h | 12 | actor type |
 | 15F2h | 14 | x |
 | 161Ah | 15 | y |
-| 16BAh | 18 | frame buffer offset |
-| 1782h | 23 | current frame |
-| 17FAh | 26 | target actor slot (operand mode 3) |
-| 1822h | 27 | second related actor slot (operand mode 4) |
+| 16BAh | 19 | frame buffer offset |
+| 1782h | 24 | current frame |
+| 17FAh | 27 | target actor slot (operand mode 3) |
+| 1822h | 28 | second related actor slot (operand mode 4) |
 | 18C2h | 32 | frame buffer segment |
 | 18EAh | 33 | animation script ip (run by opcode 0x2A) |
 | 1912h | 34 | animation script segment |
