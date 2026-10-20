@@ -51,9 +51,9 @@ stored size.
 ## Video (confirmed, `sub_125EC`)
 
 Mode 13h unchained into Mode X with a custom 12-register CRTC table at
-`ds:5316h`; misc output `0xE3` selects 480-line timing (320x240 expected,
-**open** until the CRTC table is decoded). Virtual screen row stride is
-0xAC bytes (688 pixels) to allow hardware scrolling.
+`ds:5316h`: 320x240 (480 double-scanned lines), offset register 0x2B, so
+rows are 86 bytes = 344 pixels for hardware scrolling. The playfield is
+256x224; see [vm/README.md](vm/README.md#display).
 
 ## Level descriptor (partly traced, `sub_105B4` and helpers)
 

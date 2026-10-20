@@ -15,6 +15,7 @@ Entertainment. Blackthorne and all game assets are Blizzard's property.
 
 - `docs/FORMATS.md`: reverse-engineered data formats and their status
 - `docs/ROADMAP.md`: plan and milestones
+- `docs/vm/`: the actor script VM (interpreter model and opcode reference)
 - `src/data/`: format library (archive, LZSS, levels, tiles, sprites)
 - `src/viewer/`: SDL3 level and sprite viewer
 - `tools/`: Python extraction and inspection scripts
