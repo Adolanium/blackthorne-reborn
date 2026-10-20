@@ -17,6 +17,7 @@ struct Machine {
     DataSegment ds;
     std::array<std::uint8_t, 0x10000> map{};
     Bytes scripts;
+    Bytes text;  // seg001: the language's text table (DATA.DAT entry 1, 2 or 3)
 
     // Sprite memory. Segment numbers stored in the data segment are these
     // symbolic values; sprite_data() maps them back to buffers.

@@ -137,6 +137,18 @@ void test_call_if_and_probe() {
     check(f.ds.u16(0x100) == 9, "conditional call ran and returned");
 }
 
+void test_all_opcodes_have_handlers() {
+    Fixture f;
+    bt::Vm vm(f.m);
+    std::string missing;
+    for (int op : vm.unimplemented_opcodes()) {
+        char buf[8];
+        std::snprintf(buf, sizeof buf, " %02X", op);
+        missing += buf;
+    }
+    check(missing.empty(), "opcodes without handlers:" + missing);
+}
+
 void test_page_segment() {
     check(bt::Vm::page_segment(0x4000, 0x83) == 0x4000, "page 0x83 is the base");
     check(bt::Vm::page_segment(0x4000, 0x82) == 0x3800, "page 0x82 is base - 0x800");
@@ -146,6 +158,7 @@ void test_page_segment() {
 
 int main() {
     test_page_segment();
+    test_all_opcodes_have_handlers();
     test_load_store_branch();
     test_call_return();
     test_bits_and_facing();

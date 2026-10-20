@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <vector>
 
 #include "data/archive.h"
 #include "engine/data_segment.h"
@@ -54,6 +56,13 @@ namespace flag {
 constexpr std::uint16_t kFacing = 0x40;  // selects add/sub direction and probe side
 }  // namespace flag
 
+// Something the VM asks the host to do (sound, saving, quitting).
+struct VmEvent {
+    enum class Kind { PlaySound, StopSound, MusicRestart, MusicStop, SavePassword, Quit };
+    Kind kind;
+    int id;
+};
+
 // The actor-script interpreter (sub_1609A and its 256 handlers).
 //
 // Script bytes are DATA.DAT entry 64. A script address is a (segment, ip)
@@ -76,6 +85,14 @@ public:
     void mark_offscreen_actors();                                // loc_114AE
     void anim_tick(int slot);                                    // sub_1207C
     void physics(int slot);                                      // loc_12404
+
+    // Host interaction.
+    std::vector<VmEvent>& events() { return events_; }
+    std::function<bool(std::array<char, 4>&)> load_password_;  // FB: read the save file
+    std::array<char, 4> current_password() const;
+
+    // Opcodes without a handler yet (for tests).
+    std::vector<int> unimplemented_opcodes() const;
 
     // Instructions executed by the last run_actor call (for tests/tracing).
     int last_steps() const { return steps_; }
@@ -225,6 +242,29 @@ private:
     void push_out(int axis, int other, int dir);           // sub_18222 / sub_1825E
     bool onscreen(int slot) const;
 
+    // vm_misc.cpp: sound, text boxes, portraits, shake, passwords, exit.
+    void register_misc_ops();
+    Flow op_sound();                                       // 0x02
+    Flow op_sound_stop();                                  // 0xF3
+    template <bool Restart> Flow op_music();               // 0xF4, 0xF5
+    Flow op_text_near_actor();                             // 0xE6
+    Flow op_text_at();                                     // 0xE7
+    Flow op_put_char();                                    // 0xE8
+    Flow op_set_1b46();                                    // 0xE9
+    Flow op_clear_text();                                  // 0xEA
+    Flow op_portrait_update();                             // 0xEB
+    Flow op_portrait_update_ec();                          // 0xEC
+    template <bool Vertical> Flow op_shake();              // 0xED, 0xEE
+    Flow op_apply_password();                              // 0xF6
+    Flow op_save_password();                               // 0xF7
+    Flow op_fatal();                                       // 0xF9
+    Flow op_quit();                                        // 0xFA
+    Flow op_load_password();                               // 0xFB
+    void prepare_text(std::uint16_t text, std::uint16_t style);  // sub_15C57 + sub_15C82
+    void draw_text_box(int col, int row);                  // sub_15D83
+    void draw_text(int col, int row);                      // sub_15E51
+    void portrait_update();                                // sub_15EB5
+
     std::uint16_t dest_addr(int dest);                  // reads a field byte or addr16
     std::uint16_t bit_mask(std::uint8_t b) const { return ds_.u16(static_cast<std::uint16_t>(ds_addr::kBitMasks + b)); }
     std::uint16_t read_bit(int mode);                   // bit8 then source operand -> 0/1
@@ -239,6 +279,7 @@ private:
     std::array<Handler, 256> table_{};
     std::uint16_t seg_ = 0, ip_ = 0;
     std::uint8_t last_op_ = 0;
+    std::vector<VmEvent> events_;
     int steps_ = 0;
 };
 

@@ -156,6 +156,7 @@ Vm::Vm(Machine& machine) : m_(machine), ds_(machine.ds), scripts_(machine.script
     register_world_ops();
     register_anim_ops();
     register_actor_ops();
+    register_misc_ops();
 }
 
 std::uint8_t Vm::script_byte(std::uint16_t seg, std::uint16_t ip) const {
@@ -228,6 +229,13 @@ void Vm::execute() {
         ++steps_;
         if ((this->*table_[last_op_])() == Flow::EndTurn) return;
     }
+}
+
+std::vector<int> Vm::unimplemented_opcodes() const {
+    std::vector<int> out;
+    for (int op = 0; op < 256; ++op)
+        if (table_[op] == &Vm::op_unimplemented) out.push_back(op);
+    return out;
 }
 
 Vm::Flow Vm::op_unimplemented() {
