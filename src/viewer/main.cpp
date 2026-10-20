@@ -59,6 +59,7 @@ public:
                 case SDLK_C: show_collision_ = !show_collision_; break;
                 case SDLK_O: show_objects_ = !show_objects_; break;
                 case SDLK_P: toggle_play(); break;
+                case SDLK_G: toggle_play(true); break;
                 case SDLK_RIGHT: if (sprite_mode_) select_bank(bank_ + 1); break;
                 case SDLK_LEFT: if (sprite_mode_) select_bank(bank_ - 1); break;
                 default: break;
@@ -141,13 +142,20 @@ public:
 
     // Starts the current level in the engine (play mode), Kyle at the level's
     // password-table start position when it has one.
-    void toggle_play() {
+    void toggle_play(bool from_boot = false) {
         if (game_) {
             game_.reset();
             return;
         }
         play_error_.clear();
         try {
+            if (from_boot) {
+                game_ = std::make_unique<bt::Game>(archive_, exe_path_);
+                game_->boot();
+                ticks_ = 0;
+                tick_acc_ = 0;
+                return;
+            }
             const int level_id = level_.descriptor_entry + 1;
             game_ = std::make_unique<bt::Game>(archive_, exe_path_);
             int x = level_.objects.empty() ? 128 : level_.objects[0].x;
@@ -317,8 +325,8 @@ private:
         char line[256];
         if (game_) {
             const bt::DataSegment& ds = game_->machine().ds;
-            std::snprintf(line, sizeof line, "PLAY level %d  tick %d  Kyle (%d,%d)  actors %d  [P] stop",
-                          level_index_ + 1, ticks_, ds.field(bt::field::kX, 0), ds.field(bt::field::kY, 0), ds.u16(0x32C) / 2);
+            std::snprintf(line, sizeof line, "PLAY level %02X  tick %d  Kyle (%d,%d)  actors %d  [P] stop",
+                          game_->level_id(), ticks_, ds.field(bt::field::kX, 0), ds.field(bt::field::kY, 0), ds.u16(0x32C) / 2);
         } else if (!play_error_.empty()) {
             std::snprintf(line, sizeof line, "engine stopped: %s", play_error_.c_str());
         } else if (sprite_mode_) {
@@ -372,7 +380,7 @@ int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
     std::string shot;
     int start_level = 0, start_bank = 0;
-    bool start_sprites = false, start_collision = false, start_objects = false, start_play = false;
+    bool start_sprites = false, start_collision = false, start_objects = false, start_play = false, start_boot = false;
     int start_ticks = 0;
     std::uint16_t hold_bits = 0;
     float start_x = 0, start_y = 0;
@@ -384,6 +392,7 @@ int main(int argc, char** argv) {
         else if (a == "--sprites") start_sprites = true;
         else if (a == "--collision") start_collision = true;
         else if (a == "--play") start_play = true;
+        else if (a == "--boot") start_boot = true;
         else if (a == "--ticks" && i + 1 < argc) start_ticks = std::atoi(argv[++i]);
         else if (a == "--hold" && i + 1 < argc) hold_bits = static_cast<std::uint16_t>(std::strtol(argv[++i], nullptr, 16));
         else if (a == "--objects") start_objects = true;
@@ -413,9 +422,9 @@ int main(int argc, char** argv) {
     {
         Viewer viewer(renderer, *archive, data_path.parent_path() / "BTHORNE.EXE");
         viewer.open(start_level, start_sprites, start_bank, start_collision, start_objects, start_x, start_y, start_zoom);
-        if (start_play) {
+        if (start_play || start_boot) {
             viewer.scripted_input_ = hold_bits;
-            viewer.toggle_play();
+            viewer.toggle_play(start_boot);
             for (int t = 0; t < start_ticks; ++t) viewer.update(1.0f / 30.0f);
         }
         if (!shot.empty()) {

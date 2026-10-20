@@ -32,8 +32,27 @@ Game::Game(const Archive& archive, const std::filesystem::path& exe_path, int la
     vm_ = std::make_unique<Vm>(*machine_);
 }
 
+void Game::boot() {
+    DataSegment& ds = machine_->ds;
+    // sub_10D0D: the settings block (DATA.DAT entry 0) goes to ds:25E6h.
+    const Bytes settings = archive_.entry(0);
+    for (std::size_t i = 0; i < settings.size(); ++i) ds.set_u8(static_cast<std::uint16_t>(0x25E6 + i), settings[i]);
+    // sub_10E05
+    for (std::uint16_t a : {std::uint16_t{0x302}, std::uint16_t{0x304}, std::uint16_t{0x31A}, std::uint16_t{0x328}, std::uint16_t{0x32A}, std::uint16_t{0x318}}) ds.set_u16(a, 0);
+    ds.set_u16(0x386, 0xFFFF);
+    const char start[4] = {'S', 'T', 'R', 'T'};
+    for (int k = 0; k < 4; ++k) ds.set_u16(static_cast<std::uint16_t>(0x372 + 2 * k), static_cast<std::uint8_t>(start[k]));
+    // sub_128E9: Kyle's starting flags and the first level.
+    ds.set_field(0x1552, 0, 0);
+    ds.set_field(field::kFlags, 0, 0x27);
+    load_level(0x61, 0x80, 0x70);
+}
+
 void Game::load_level(int level_id, int x, int y) {
     DataSegment& ds = machine_->ds;
+    // sub_10A15 spawns Kyle with the parameter and low flag byte he had before.
+    const std::uint16_t kyle_param = ds.field(0x1552, 0);
+    const std::uint16_t kyle_flags = static_cast<std::uint16_t>(ds.field(field::kFlags, 0) & 0xFF);
     for (std::uint16_t a : kResetGlobals) ds.set_u16(a, 0);
     ds.set_u16(0x1C8A, 0x1000);  // velocity limits
     ds.set_u16(0x1C8C, 0x1000);
@@ -91,10 +110,10 @@ void Game::load_level(int level_id, int x, int y) {
     ds.set_u16(0x31E, 0);
     ds.set_u16(0x26, static_cast<std::uint16_t>(x));
     ds.set_u16(0x28, static_cast<std::uint16_t>(y));
-    ds.set_u16(0x32E, 0);
+    ds.set_u16(0x32E, kyle_param);
     ds.set_u16(ds_addr::kCurrentSlot, 0xFFFF);
     ds.set_u16(0x364, 0xFFFF);
-    if (vm_->spawn_actor(0, 0xFFFF, 0) != 0) throw std::runtime_error("could not spawn Kyle");
+    if (vm_->spawn_actor(0, 0xFFFF, kyle_flags) != 0) throw std::runtime_error("could not spawn Kyle");
     ds.set_u16(0x31E, 2);
 
     set_camera_bounds();
@@ -273,6 +292,19 @@ void Game::tick() {
         vm_->spawn_visible_records();
         main_loop_actors();
     }
+    if (machine_->ds.u16(0x318) & 1) change_level();
+}
+
+// sub_1011B: on a level exit every actor's script restarts once (ds:316h),
+// then the level in ds:1CA8h loads with Kyle at (ds:1CAAh, ds:1CACh).
+void Game::change_level() {
+    DataSegment& ds = machine_->ds;
+    ds.set_u16(0x318, 0);
+    ds.set_u16(0x316, static_cast<std::uint16_t>(ds.u16(0x316) + 1));
+    vm_->run_scheduler();
+    load_level(ds.u16(0x1CA8), static_cast<std::int16_t>(ds.u16(0x1CAA)), static_cast<std::int16_t>(ds.u16(0x1CAC)));
+    main_loop_actors();
+    main_loop_actors();
 }
 
 }  // namespace bt

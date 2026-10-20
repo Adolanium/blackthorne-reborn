@@ -16,6 +16,10 @@ class Game {
 public:
     Game(const Archive& archive, const std::filesystem::path& exe_path, int language = 0);
 
+    // Starts the game the way the original does after its hardware setup
+    // (sub_10E05, sub_128E9): password "STRT", then level 0x61 (the opening).
+    void boot();
+
     // Loads level `level_id` (1-based resource id of its descriptor, e.g. 0xC0
     // for the first level) with Kyle starting at (x, y).
     void load_level(int level_id, int x, int y);
@@ -52,6 +56,7 @@ private:
     bool camera_needs_flip() const;  // sub_100B6 test
     void spawn_start_records();    // sub_11442
     void main_loop_actors();       // the actor part of sub_10043
+    void change_level();           // sub_1011B, level-exit branch
 
     const Archive& archive_;
     std::unique_ptr<Machine> machine_;
