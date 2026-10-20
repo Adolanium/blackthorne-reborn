@@ -124,22 +124,22 @@ void Renderer::draw_hud(const Game& game, Image& out) const {
         if (item > 0 && item < static_cast<int>(item_icons_.size())) stamp(game, out, item_icons_[item], 32, x, y, 0xF0);
         if (di == selected) stamp(game, out, selection_frame_, 32, x, y, 0xF0);
     }
-    // Item name: 16 characters from the table for the language at ds:579Eh.
+    // Item name: 16 characters from the table for the language at ds:579Eh,
+    // drawn whole by sub_146BA (sub_14DE6); the space glyphs fill the box. In
+    // widescreen the box is wider: spaces fill it and the name is centred.
     const int item = ds.u16(static_cast<std::uint16_t>(0x1CB2 + selected));
     const std::uint16_t names = ds.u16(static_cast<std::uint16_t>(0x579E + ds.u16(0x6A) * 2));
     const auto& font = fonts_[0];
-    for (int i = 0; i < 16; ++i) {
-        const std::uint8_t ch = ds.u8(static_cast<std::uint16_t>(names + item * 16 + i));
+    const int pad = stretch / 16, cells = 16 + stretch / 8;
+    for (int c = 0; c < cells; ++c) {
+        const int i = c - pad;
+        const std::uint8_t ch = (i >= 0 && i < 16) ? ds.u8(static_cast<std::uint16_t>(names + item * 16 + i)) : ' ';
         const int g = ch - 0x20;
-        if (g < 0 || g >= static_cast<int>(font.size())) continue;  // spaces too: their pixels fill the box
+        if (g < 0 || g >= static_cast<int>(font.size())) continue;
         const Glyph& gl = font[g];
         for (int y = 0; y < 8; ++y)
-            for (int x = 0; x < 8; ++x) {
-                const int plane = x & 3, data_col = x >> 2;
-                if (gl.mask[plane * 2 + (y >> 2)] & (0x80 >> ((y & 3) * 2 + data_col)))
-                    out.pixels[static_cast<std::size_t>(kHeight + 4 + y) * out.width + 64 + i * 8 + x] =
-                        colour(ds, gl.pixels[y * 8 + x]);
-            }
+            for (int x = 0; x < 8; ++x)
+                out.pixels[static_cast<std::size_t>(kHeight + 4 + y) * out.width + 64 + c * 8 + x] = colour(ds, gl.pixels[y * 8 + x]);
     }
 }
 
