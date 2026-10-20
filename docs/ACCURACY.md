@@ -140,6 +140,21 @@ Ours models the text segment, seg002 and the data segment behind it, but not
 the DOS heap, so the portrait position word ds:36Ch differs there. Nothing
 else changes. Before this was modelled, that read crashed our engine.
 
+Screens: on all 21 levels, 12 screens each over 3,000 frames of random
+play, what ours displays matches what the original displays pixel for
+pixel. The one exception is the known bottom-bar line.
+
+Scenarios: Kyle was placed beside every kind of object in every level, 301
+scenarios of 2,300 frames each. All match.
+
+Other flows that match frame for frame:
+- the title menu (PRACTICE, NEW GAME, OPTIONS, CONTINUE with and without a
+  save, QUIT);
+- the in-game quit and give-up menus;
+- the whole ending sequence back to the title.
+
+Sound effect requests and music starts and stops match too.
+
 Current result: on all 21 levels in the password table, 4,000 frames each
 of random play (movement, jumping, running, shooting, items, and the level
 changes that random play triggers), the game state matches the original
