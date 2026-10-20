@@ -147,8 +147,21 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
         }
         factor[k] = base ? static_cast<float>(shown) / static_cast<float>(base) : 1.0f;
     }
+    // smooth_fallback packs also paint cycled colours: the painting's
+    // brightness follows the cycling colour (shimmer), blended between pixels.
+    const bool smooth = pack_ && pack_->smooth_fallback() && S == 4;
+    std::array<float, 256> shimmer{};
+    for (int i = 0; i < 256; ++i) {
+        auto lum = [&](const std::uint8_t* pal) {
+            return 0.30f * static_cast<float>(pal[i * 3] & 0x3F) + 0.59f * static_cast<float>(pal[i * 3 + 1] & 0x3F) +
+                   0.11f * static_cast<float>(pal[i * 3 + 2] & 0x3F);
+        };
+        const float b = lum(m.palette_at_load.data()), s = lum(scene.palette);
+        shimmer[static_cast<std::size_t>(i)] = b < 2.0f ? 1.0f : std::clamp(s / b, 0.4f, 2.0f);
+    }
     std::array<std::array<float, 3>, 256> tint{};
-    std::array<bool, 256> unfollowable = animated;  // for the map: cycled, or grown out of black
+    std::array<bool, 256> unfollowable{};  // for the map: grown out of black, or cycled (without smooth_fallback)
+    if (!smooth) unfollowable = animated;
     std::array<bool, 256> identity{};
     for (int i = 0; i < 256; ++i) {
         const std::uint32_t shown = pal_colour(scene.palette, i), base = pal_colour(m.palette_at_load.data(), i);
@@ -208,7 +221,6 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
     };
     // smooth_fallback: the original layers rounded off with Scale2x twice,
     // for everything that keeps the original pixels.
-    const bool smooth = pack_ && pack_->smooth_fallback() && S == 4;
     if (smooth) {
         const Image* sources[4] = {&layers.background_back, &layers.background_front, &layers.foreground_back, &layers.foreground_front};
         for (int k = 0; k < 4; ++k) {
@@ -270,6 +282,36 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                 const int tint_idx = merged && front_idx >= 0 ? front_idx : idx;
                 const float* f = tint_idx >= 0 ? tint[static_cast<std::size_t>(tint_idx)].data() : factor;
                 const bool plain = tint_idx >= 0 ? identity[static_cast<std::size_t>(tint_idx)] : factor_identity;
+                if (smooth && tint_idx >= 0 && animated[static_cast<std::size_t>(tint_idx)]) {
+                    // Cycled colour: brightness from the cycling, blended with
+                    // the neighbouring pixels' so the shimmer has no blocks.
+                    const Image& from = merged && front_idx >= 0 ? front_1x : own;
+                    const float mine = shimmer[static_cast<std::size_t>(tint_idx)];
+                    auto at = [&](int px, int py) {
+                        if (px < 0 || py < 0 || px >= W || py >= H) return mine;
+                        const int v = Renderer::layer_index(from.pixels[static_cast<std::size_t>(py) * W + px]);
+                        return v >= 0 && animated[static_cast<std::size_t>(v)] ? shimmer[static_cast<std::size_t>(v)] : mine;
+                    };
+                    for (int yy = 0; yy < S; ++yy) {
+                        const float fy = (static_cast<float>(yy) + 0.5f) / static_cast<float>(S) - 0.5f;
+                        const int y0 = fy < 0 ? y - 1 : y;
+                        const float ty = fy < 0 ? fy + 1.0f : fy;
+                        const std::uint32_t* src = &paint->pixels[static_cast<std::size_t>((oy + y) * S + yy) * paint->width + (ox + x) * S];
+                        std::uint32_t* dst = &play.pixels[static_cast<std::size_t>(y * S + yy) * play.width + x * S];
+                        for (int xx = 0; xx < S; ++xx) {
+                            const std::uint32_t a = src[xx] >> 24;
+                            if (!a) continue;
+                            const float fx = (static_cast<float>(xx) + 0.5f) / static_cast<float>(S) - 0.5f;
+                            const int x0 = fx < 0 ? x - 1 : x;
+                            const float tx = fx < 0 ? fx + 1.0f : fx;
+                            const float l = (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty) + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
+                            const float g[3] = {l, l, l};
+                            const std::uint32_t c = scale_rgb(src[xx], g);
+                            dst[xx] = a == 255 ? c : over(dst[xx], c);
+                        }
+                    }
+                    continue;
+                }
                 for (int yy = 0; yy < S; ++yy) {
                     const std::uint32_t* src = &paint->pixels[static_cast<std::size_t>((oy + y) * S + yy) * paint->width + (ox + x) * S];
                     std::uint32_t* dst = &play.pixels[static_cast<std::size_t>(y * S + yy) * play.width + x * S];
