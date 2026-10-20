@@ -614,6 +614,7 @@ void Game::wait_frame() {
     DataSegment& ds = machine_->ds;
     if (ds.s16(0x5312) <= 0) return;  // the retrace already came: no wait
     saveable_ = nesting_ == 0;
+    retraces_ = ds.s16(0x5312);
     done_.release();
     go_.acquire();
     if (stopping_) throw Stop{};

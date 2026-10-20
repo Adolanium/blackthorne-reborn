@@ -58,6 +58,9 @@ public:
     // static level data are reloaded from DATA.DAT. Saving is possible at a
     // plain main-loop frame (can_save()); throws otherwise or on I/O errors.
     bool can_save() const { return saveable_; }
+    // How many 60 Hz vertical retraces the frame just produced waits for on
+    // the original (ds:5312h at the frame wait): normally 2, more during fades.
+    int frame_retraces() const { return retraces_; }
     void save_state(const std::filesystem::path& path) const;
     void load_state(const std::filesystem::path& path);
 
@@ -109,6 +112,7 @@ private:
     std::binary_semaphore go_{0}, done_{0};
     bool stopping_ = false;
     bool saveable_ = false;
+    int retraces_ = 2;
     int nesting_ = 0;              // > 0 inside flips, fades, menus and level changes
     std::exception_ptr error_;
 

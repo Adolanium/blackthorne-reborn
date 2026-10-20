@@ -25,11 +25,12 @@
 namespace {
 
 constexpr const char* kDefaultData = "C:/Program Files (x86)/Blizzard Classics/Blackthorne/BTHORNE/DATA.DAT";
-// A frame lasts ds:68h vertical retraces of the 60 Hz display: 2 normally
-// (30 frames a second), 1 after the FASTER cheat.
+// A frame is shown for as many 60 Hz retraces as the original waits for it
+// (ds:5312h): 2 normally (30 frames a second), 1 after the FASTER cheat,
+// 4 during fades.
 double frame_seconds(const bt::Game& game) {
-    const int retraces = game.machine().ds.u16(0x68);
-    return (retraces >= 1 && retraces <= 4 ? retraces : 2) / 60.0;
+    const int retraces = game.frame_retraces();
+    return (retraces >= 1 && retraces <= 8 ? retraces : 2) / 60.0;
 }
 
 // Gamepad layout: d-pad / left stick move, A jump, X fire, Y draw/holster,
