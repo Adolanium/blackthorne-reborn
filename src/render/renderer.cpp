@@ -85,7 +85,8 @@ void Renderer::render_screen(const Scene& scene, Image& out, const RenderOptions
     if (hud) draw_hud(scene, out);
 }
 
-// A HUD stamp: 4-bit pixels ORed with the colour base; 0 is transparent.
+// A HUD stamp, drawn like a sprite part (sub_157F0): pixels below 16 take the
+// colour base, others are absolute colours; 0 is transparent.
 void Renderer::stamp(const Scene& scene, Image& out, const std::vector<std::uint8_t>& pixels, int size, int x, int y,
                      std::uint8_t colour_base) const {
     for (int yy = 0; yy < size; ++yy)
@@ -93,7 +94,7 @@ void Renderer::stamp(const Scene& scene, Image& out, const std::vector<std::uint
             const std::uint8_t v = pixels[static_cast<std::size_t>(yy) * size + xx];
             const int sx = x + xx, sy = y + yy;
             if (!v || sx < 0 || sy < 0 || sx >= out.width || sy >= out.height) continue;
-            out.pixels[static_cast<std::size_t>(sy) * out.width + sx] = colour(scene.palette, v | colour_base);
+            out.pixels[static_cast<std::size_t>(sy) * out.width + sx] = colour(scene.palette, v >= 16 ? v : v | colour_base);  // drawn like sprites
         }
 }
 
@@ -144,7 +145,8 @@ void Renderer::draw_hud(const Scene& scene, Image& out) const {
 void Renderer::render(const Scene& scene, Image& out, const RenderOptions& opt) const {
     const int width = kWidth + 2 * opt.extra;
     out.resize(width, kHeight);
-    const DataSegment& ds = (*scene.machine).ds;
+    const Machine& m = *scene.machine;
+    const DataSegment& ds = m.ds;
     auto s16 = [&](std::uint16_t a) { return static_cast<int>(static_cast<std::int16_t>(ds.u16(a))); };
     // The view is the game camera widened on both sides, kept inside the map
     // (or centred on a map narrower than the view).
@@ -153,30 +155,44 @@ void Renderer::render(const Scene& scene, Image& out, const RenderOptions& opt) 
     int view_x = cam_x - opt.extra;
     if (opt.extra) view_x = map_px >= width ? std::clamp(view_x, 0, map_px - width) : (map_px - width) / 2;
     const int shift = cam_x - view_x;  // where the 256-wide game screen starts
-    // sub_15BA0's order: tiles with bit 3 set (in the tile word) and sprite
-    // priority 3 are in front; within a layer of sprites, lower part numbers
-    // are drawn later (on top).
-    auto background = [&](int pass) {
+    auto background = [&](int pass, Image& to) {
         if (opt.background && scene.has_background)
-            draw_layer(scene, scene.machine->ds.u16(0x25B2), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17), s16(0x1B52) - shift,
-                       s16(0x1B54), pass, out);
+            draw_layer(scene, ds.u16(0x25B2), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17), s16(0x1B52) - shift, s16(0x1B54),
+                       pass, to);
     };
-    auto foreground = [&](int pass) {
+    auto foreground = [&](int pass, Image& to) {
         if (opt.foreground)
-            draw_layer(scene, scene.machine->ds.u16(0x25B0), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth),
-                       ds.u16(Machine::kMapHeight), view_x, cam_y, pass, out);
+            draw_layer(scene, ds.u16(0x25B0), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth), ds.u16(Machine::kMapHeight),
+                       view_x, cam_y, pass, to);
     };
     auto sprites = [&](int priority) {
         if (opt.sprites) draw_parts(scene, view_x, cam_y, priority, out);
     };
-    background(0);
+    // sub_15BA0's order for repainted cells: tiles with bit 3 set (in the
+    // tile word) and sprite priority 3 are in front; within a layer of
+    // sprites, lower part numbers are drawn later (on top).
+    background(0, out);
     sprites(0);
-    foreground(0);
+    foreground(0, out);
     sprites(1);
     sprites(2);
-    background(8);
-    foreground(8);
+    background(8, out);
+    foreground(8, out);
     sprites(3);
+    // The full redraw (sub_125BB): all background tiles under all foreground
+    // tiles. Cells nothing has gone over since then still show it, and text
+    // cells in the caption font are drawn over it.
+    Image tiles;
+    tiles.resize(width, kHeight);
+    for (int pass : {0, 8}) background(pass, tiles);
+    for (int pass : {0, 8}) foreground(pass, tiles);
+    for (int cell = 0; cell < 32 * 28; ++cell) {
+        if (m.repainted[static_cast<std::size_t>(cell)]) continue;
+        const int x0 = shift + (cell % 32) * 8, y0 = (cell / 32) * 8;
+        for (int y = y0; y < y0 + 8; ++y)
+            std::copy_n(tiles.pixels.begin() + static_cast<std::ptrdiff_t>(y * width + x0), 8,
+                        out.pixels.begin() + static_cast<std::ptrdiff_t>(y * width + x0));
+    }
     if (opt.extra && opt.dim_sides) {
         for (int y = 0; y < kHeight; ++y)
             for (int x = 0; x < width; ++x) {
@@ -185,21 +201,7 @@ void Renderer::render(const Scene& scene, Image& out, const RenderOptions& opt) 
                 p = 0xFF000000u | (((p >> 1) & 0x7F7F7Fu) + ((p >> 3) & 0x1F1F1Fu));  // about 62%
             }
     }
-    if (opt.text) {
-        Image tiles;  // the map alone, for text cells in the alternate font
-        if (ds.u16(0x1CF6) & 0x100) {
-            tiles.resize(width, kHeight);
-            if (opt.background && scene.has_background)
-                for (int pass : {0, 8})
-                    draw_layer(scene, scene.machine->ds.u16(0x25B2), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17),
-                               s16(0x1B52) - shift, s16(0x1B54), pass, tiles);
-            if (opt.foreground)
-                for (int pass : {0, 8})
-                    draw_layer(scene, scene.machine->ds.u16(0x25B0), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth),
-                               ds.u16(Machine::kMapHeight), view_x, cam_y, pass, tiles);
-        }
-        draw_text(scene, shift, tiles.width ? &tiles : nullptr, out);
-    }
+    if (opt.text) draw_text(scene, shift, (ds.u16(0x1CF6) & 0x100) ? &tiles : nullptr, out);
 }
 
 // One map layer (cells: bits 0-9 metatile) over the camera window.
@@ -269,7 +271,7 @@ void Renderer::draw_parts(const Scene& scene, int cam_x, int cam_y, int priority
         for (int y = 0; y < size; ++y) {
             const int sy = py + y;
             if (sy < 0 || sy >= kHeight) continue;
-            const int srow = (fl & 0x10) ? size - 1 - y : y;
+            const int srow = y;  // bit 0x10 mirrors the part layout only: the drawers (sub_14E33, sub_15321) never flip pixels vertically
             for (int x = 0; x < size; ++x) {
                 const int sx = px + x;
                 if (sx < 0 || sx >= width) continue;

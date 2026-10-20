@@ -69,11 +69,18 @@ This found:
 - glyphs that are opaque with the normal font and masked over the map with
   the caption font;
 - the item name box;
-- sprite pixels with their own palette row (blood);
+- sprite and HUD icon pixels with their own palette row (blood, potions);
+- bit 10h of a part flips the part layout but never its pixels;
+- the map, frame and static segments keep the previous level's bytes;
 - the display model above, including the palette upload flag that palette
   cycling sets every frame.
 
-Known cosmetic differences come from how the original paints. It keeps two
+The display also models how the original paints over time. Its full redraw
+(sub_125BB) puts all background tiles under all foreground tiles. Only cells
+repainted since then, under sprites or text, get the tile bit 3 order. Ours
+tracks which cells were repainted since the last full redraw.
+
+Remaining cosmetic differences come from how the original paints. It keeps two
 video pages and repaints only the screen cells marked dirty. A sprite is
 redrawn only where it overlaps such a cell (sub_15880). So where several
 actors overlap and only some are redrawn, or a tile changes without its

@@ -24,6 +24,11 @@ struct Machine {
     // The VGA DAC: the palette as last uploaded (sub_127C5), which is what
     // the screen shows; ds:4D12h can be ahead of it.
     std::array<std::uint8_t, 768> dac{};
+    // The 32x28 screen cells repainted since the last full redraw (sprites
+    // or text went over them). The original's full redraw paints all
+    // background tiles then all foreground tiles; only repainted cells get
+    // the tile bit 3 ordering (sub_15A55). Kept for the display.
+    std::array<std::uint8_t, 32 * 28> repainted{};
     Bytes text;
     static constexpr std::size_t kTextImageSize = 0x4240;
     std::uint8_t text_u8(std::uint16_t off) const {

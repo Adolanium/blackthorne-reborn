@@ -179,9 +179,8 @@ void Game::load_level_data(int level_id, int x, int y) {
     ds.set_u16(0x259E, Machine::kFrameSeg);
     ds.set_u16(0x2594, Machine::kTileAnimSeg);
     ds.set_u16(0x25A0, Machine::kStaticSeg);
-    machine_->frames.fill(0);
-    machine_->statics.fill(0);
-    machine_->map.fill(0);
+    // The map, frame and static segments are not cleared: past the new
+    // level's data they keep the previous level's bytes, as on the original.
 
     level_id_ = level_id;
     ds.set_u16(0x1CA2, ds.u16(0x1CA4));
@@ -249,6 +248,7 @@ void Game::load_level_data(int level_id, int x, int y) {
 
     set_camera_bounds();
     place_camera();
+    machine_->repainted.fill(0);
     draw_page();  // sub_10A0C draws the first screen and flips to it
     page_flip();
     hud_init();
@@ -640,6 +640,24 @@ void Game::upload_palette() {
 
 // sub_15BA0 draws the sprites, tiles and text on the page this frame shows.
 void Game::draw_page() {
+    // Cells under sprite parts and text are repainted from now on (the
+    // original marks them dirty when it draws or erases there).
+    Machine& m = *machine_;
+    const DataSegment& ds = m.ds;
+    const int cx = ds.s16(0x1B4E), cy = ds.s16(0x1B50);
+    auto mark = [&](int x0, int y0, int x1, int y1) {
+        for (int y = std::max(0, y0 >> 3); y <= std::min(27, y1 >> 3); ++y)
+            for (int x = std::max(0, x0 >> 3); x <= std::min(31, x1 >> 3); ++x) m.repainted[static_cast<std::size_t>(y * 32 + x)] = 1;
+    };
+    for (int p = 0; p < 0x100; p += 2) {
+        if (!(ds.field(0x452, p) & 0x80)) continue;
+        const int size = ds.field(0x952, p);
+        const int x = ds.s16(static_cast<std::uint16_t>(0x552 + p)) - cx, y = ds.s16(static_cast<std::uint16_t>(0x652 + p)) - cy;
+        if (x + size <= 0 || y + size <= 0 || x >= 256 || y >= 224) continue;
+        mark(x, y, x + size - 1, y + size - 1);
+    }
+    for (int c = 0; c < 32 * 28; ++c)
+        if (ds.u16(static_cast<std::uint16_t>(0x2D08 + c * 2)) != 0x20) m.repainted[static_cast<std::size_t>(c)] = 1;
     if (!shown_) shown_ = std::make_unique<Machine>();
     *shown_ = *machine_;
     shown_has_background_ = has_background_;
@@ -759,6 +777,7 @@ void Game::flip_screen() {
     DataSegment& ds = machine_->ds;
     vm_->spawn_visible_records();
     ds.set_u8(0x60C6, 3);  // byte_15FC6: redraw everything on the next pages
+    machine_->repainted.fill(0);  // sub_125BB redraws the whole screen
     iteration();
     --nesting_;
 }
