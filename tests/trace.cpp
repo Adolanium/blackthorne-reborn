@@ -2,6 +2,7 @@
 // tools/emu/btemu.py records the original, for tools/emu/compare.py.
 // Usage: bttrace <DATA.DAT> <ticks> <out.bin> [--input "from-to:hexbits,..."]
 //                [--poke "frame:hexaddr=hexvalue,..."] [--map] [--savegame XXXX]
+//                [--shots f1,f2,...] [--pack <art pack dir>] [--sounds file]
 // --map also writes the map segment per tick to <out.bin>.map.
 // Input for tick k is the schedule's bits at k - 1, matching btemu.py, which
 // writes the word for the next tick at each frame boundary.
@@ -12,11 +13,13 @@
 #include <exception>
 #include <cstdlib>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "data/archive.h"
 #include "engine/game.h"
+#include "render/hd.h"
 #include "render/renderer.h"
 
 namespace {
@@ -77,10 +80,12 @@ int main(int argc, char** argv) {
     std::string savegame;
     std::vector<int> shots;  // frames to render to <out.bin>.<frame>.ppm
     std::string sounds_path;  // "frame id" per sound request, like btemu.py --sounds
+    std::string pack_dir;     // --pack: shots through the HD renderer with this art pack
     for (int i = 4; i < argc; ++i) {
         if (std::string(argv[i]) == "--map") with_map = true;
         if (std::string(argv[i]) == "--savegame" && i + 1 < argc) savegame = argv[i + 1];
         if (std::string(argv[i]) == "--sounds" && i + 1 < argc) sounds_path = argv[i + 1];
+        if (std::string(argv[i]) == "--pack" && i + 1 < argc) pack_dir = argv[i + 1];
         if (std::string(argv[i]) == "--shots" && i + 1 < argc)
             for (const char* p = argv[i + 1]; *p;) {
                 char* end = nullptr;
@@ -94,6 +99,9 @@ int main(int argc, char** argv) {
 
     bt::Archive archive(data);
     const bt::Renderer renderer(archive);
+    std::unique_ptr<bt::ArtPack> pack;
+    if (!pack_dir.empty()) pack = std::make_unique<bt::ArtPack>(pack_dir);
+    const bt::HdRenderer hd(renderer, pack.get(), pack ? pack->scale() : 1);
     bt::Image screen;
     bt::Game game(archive, data.parent_path() / "BTHORNE.EXE");
     if (!savegame.empty())  // what savegame.000 holds for CONTINUE
@@ -140,7 +148,8 @@ int main(int argc, char** argv) {
         out.write(reinterpret_cast<const char*>(game.machine().ds.raw()), bt::DataSegment::kSize);
         if (with_map) map_out.write(reinterpret_cast<const char*>(game.machine().map.data()), static_cast<std::streamsize>(game.machine().map.size()));
         if (std::find(shots.begin(), shots.end(), t) != shots.end()) {
-            renderer.render_screen(game, screen);
+            if (pack) hd.render_screen(game.display(), screen);
+            else renderer.render_screen(game, screen);
             std::ofstream ppm(std::string(argv[3]) + "." + std::to_string(t) + ".ppm", std::ios::binary);
             ppm << "P6" << char(10) << screen.width << ' ' << screen.height << char(10) << "255" << char(10);
             for (std::uint32_t px : screen.pixels) {

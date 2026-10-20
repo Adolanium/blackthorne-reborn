@@ -68,7 +68,7 @@ void Game::save_state(const std::filesystem::path& path) const {
     auto put = [&](const void* p, std::size_t n) { out.write(static_cast<const char*>(p), static_cast<std::streamsize>(n)); };
     put(kSaveMagic, sizeof kSaveMagic);
     if (!saveable_ && worker_.joinable()) throw std::runtime_error("can't save in the middle of a transition");
-    const std::int32_t header[3] = {level_id_, has_background_ ? 1 : 0, 0};
+    const std::int32_t header[3] = {level_id_, has_background_ ? 1 : 0, 3};  // [2] = 3: the map, tiles and palette at load follow
     put(header, sizeof header);
     put(m.ds.raw(), DataSegment::kSize);
     put(m.map.data(), m.map.size());
@@ -77,6 +77,10 @@ void Game::save_state(const std::filesystem::path& path) const {
     put(m.tiles.data(), m.tiles.size());
     put(m.tile_masks.data(), m.tile_masks.size());
     put(m.tile_anims.data(), m.tile_anims.size());
+    put(m.map_at_load.data(), m.map_at_load.size());
+    put(m.tiles_at_load.data(), m.tiles_at_load.size());
+    put(m.tile_masks_at_load.data(), m.tile_masks_at_load.size());
+    put(m.palette_at_load.data(), m.palette_at_load.size());
     if (!out) throw std::runtime_error("cannot write " + path.string());
 }
 
@@ -101,6 +105,17 @@ void Game::load_state(const std::filesystem::path& path) {
     get(machine->tiles.data(), machine->tiles.size());
     get(machine->tile_masks.data(), machine->tile_masks.size());
     get(machine->tile_anims.data(), machine->tile_anims.size());
+    // Older saves: the saved map and tiles stand in for the loaded ones.
+    machine->map_at_load = machine->map;
+    machine->tiles_at_load = machine->tiles;
+    machine->tile_masks_at_load = machine->tile_masks;
+    std::copy_n(ds.data() + kBasePalette, 768, machine->palette_at_load.begin());
+    if (header[2] >= 1) get(machine->map_at_load.data(), machine->map_at_load.size());
+    if (header[2] >= 2) {
+        get(machine->tiles_at_load.data(), machine->tiles_at_load.size());
+        get(machine->tile_masks_at_load.data(), machine->tile_masks_at_load.size());
+    }
+    if (header[2] >= 3) get(machine->palette_at_load.data(), machine->palette_at_load.size());
     if (!in) throw std::runtime_error(path.string() + " is truncated");
     for (std::size_t i = 0; i < ds.size(); ++i) machine->ds.set_u8(static_cast<std::uint16_t>(i), ds[i]);
     // Sprite banks: the ids the level loaded are in ds:1152h (slot = index).
@@ -249,6 +264,10 @@ void Game::load_level_data(int level_id, int x, int y) {
     set_camera_bounds();
     place_camera();
     machine_->repainted.fill(0);
+    machine_->map_at_load = machine_->map;
+    machine_->tiles_at_load = machine_->tiles;
+    machine_->tile_masks_at_load = machine_->tile_masks;
+    std::copy_n(ds.raw() + kBasePalette, 768, machine_->palette_at_load.begin());
     draw_page();  // sub_10A0C draws the first screen and flips to it
     page_flip();
     hud_init();

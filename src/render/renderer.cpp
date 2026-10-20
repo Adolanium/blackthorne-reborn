@@ -1,6 +1,7 @@
 #include "render/renderer.h"
 
 #include <algorithm>
+#include <array>
 
 namespace bt {
 namespace {
@@ -69,7 +70,8 @@ void Renderer::render_screen(const Scene& scene, Image& out, const RenderOptions
     const bool hud = (scene.machine->ds.u16(0x1CF6) & 1);
     // Screen shake (sub_10AC1 offsets, applied by the page flip).
     const DataSegment& ds = (*scene.machine).ds;
-    const int shake_x = static_cast<std::int16_t>(ds.u16(0x344)), shake_y = static_cast<std::int16_t>(ds.u16(0x346));
+    const int shake_x = opt.no_shake ? 0 : static_cast<std::int16_t>(ds.u16(0x344));
+    const int shake_y = opt.no_shake ? 0 : static_cast<std::int16_t>(ds.u16(0x346));
     // Without the HUD the original centres the playfield horizontally but
     // keeps it at the top (the bottom 16 lines stay black).
     // The page: playfield and HUD as drawn, before the shake.
@@ -344,6 +346,60 @@ void Renderer::render_layer(const Scene& scene, bool background, int pass, Image
         else
             draw_layer(scene, ds.u16(0x25B0), ds.u16(Machine::kMapRowBytes), w, h, 0, 0, p, out);
     }
+}
+
+// Index-encoding palette: entry i shows as red i >> 2, green i & 3 (6-bit
+// values), which layer_index() turns back into i.
+static const std::array<std::uint8_t, 768> kIndexPalette = [] {
+    std::array<std::uint8_t, 768> p{};
+    for (int i = 0; i < 256; ++i) {
+        p[i * 3] = static_cast<std::uint8_t>(i >> 2);
+        p[i * 3 + 1] = static_cast<std::uint8_t>(i & 3);
+    }
+    return p;
+}();
+
+int Renderer::layer_index(std::uint32_t pixel) {
+    if (!(pixel >> 24)) return -1;
+    const int r = static_cast<int>(((pixel >> 16) & 0xFF) * 63 + 127) / 255, g = static_cast<int>(((pixel >> 8) & 0xFF) * 63 + 127) / 255;
+    return (r << 2) | g;
+}
+
+void Renderer::render_layers(const Scene& scene, const RenderOptions& opt, Layers& out) const {
+    const int width = kWidth + 2 * opt.extra;
+    const DataSegment& ds = scene.machine->ds;
+    auto s16 = [&](std::uint16_t a) { return static_cast<int>(static_cast<std::int16_t>(ds.u16(a))); };
+    const int cam_x = s16(0x1B4E), cam_y = s16(0x1B50);
+    const int map_px = ds.u16(Machine::kMapWidth) * 16;
+    int view_x = cam_x - opt.extra;
+    if (opt.extra) view_x = map_px >= width ? std::clamp(view_x, 0, map_px - width) : (map_px - width) / 2;
+    out.view_x = view_x;
+    out.cam_y = cam_y;
+    out.shift = cam_x - view_x;
+    out.bg_x = s16(0x1B52) - out.shift;
+    out.bg_y = s16(0x1B54);
+    const Scene indexed{scene.machine, scene.has_background, kIndexPalette.data()};
+    auto clear = [&](Image& img) {
+        img.resize(width, kHeight);
+        std::fill(img.pixels.begin(), img.pixels.end(), 0u);
+    };
+    for (Image* img : {&out.background_back, &out.background_front, &out.foreground_back, &out.foreground_front, &out.text})
+        clear(*img);
+    if (opt.background && scene.has_background) {
+        draw_layer(indexed, ds.u16(0x25B2), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17), out.bg_x, out.bg_y, 0, out.background_back);
+        draw_layer(indexed, ds.u16(0x25B2), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17), out.bg_x, out.bg_y, 8, out.background_front);
+    }
+    if (opt.foreground) {
+        draw_layer(indexed, ds.u16(0x25B0), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth), ds.u16(Machine::kMapHeight),
+                   view_x, cam_y, 0, out.foreground_back);
+        draw_layer(indexed, ds.u16(0x25B0), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth), ds.u16(Machine::kMapHeight),
+                   view_x, cam_y, 8, out.foreground_front);
+    }
+    for (int priority = 0; priority < 4; ++priority) {
+        clear(out.sprites[priority]);
+        if (opt.sprites) draw_parts(scene, view_x, cam_y, priority, out.sprites[priority]);
+    }
+    if (opt.text) draw_text(scene, out.shift, nullptr, out.text);
 }
 
 Scene live_scene(const Game& game) {

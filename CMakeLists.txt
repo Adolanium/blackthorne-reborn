@@ -50,7 +50,7 @@ add_library(btengine STATIC
 )
 target_link_libraries(btengine PUBLIC btdata)
 
-add_library(btrender STATIC src/render/renderer.cpp src/render/filters.cpp src/render/png.cpp)
+add_library(btrender STATIC src/render/renderer.cpp src/render/filters.cpp src/render/png.cpp src/render/hd.cpp)
 target_link_libraries(btrender PUBLIC btengine)
 target_include_directories(btrender PRIVATE ${stb_SOURCE_DIR})
 

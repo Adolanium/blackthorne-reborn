@@ -29,6 +29,15 @@ struct Machine {
     // background tiles then all foreground tiles; only repainted cells get
     // the tile bit 3 ordering (sub_15A55). Kept for the display.
     std::array<std::uint8_t, 32 * 28> repainted{};
+    // The map segment as the level loaded it: cells the game has changed
+    // since (doors, bridges) differ from it. Art packs paint the loaded map.
+    std::array<std::uint8_t, 0x10000> map_at_load{};
+    // The tileset and masks as the level loaded them: tiles that tile
+    // animations rewrote differ from these.
+    std::array<std::uint8_t, 0x10000> tiles_at_load{};
+    std::array<std::uint8_t, 0x2000> tile_masks_at_load{};
+    // The level's palette (ds:4A12h) as it loaded; the game can change it later.
+    std::array<std::uint8_t, 768> palette_at_load{};
     Bytes text;
     static constexpr std::size_t kTextImageSize = 0x4240;
     // Past the data segment's own image and stack (8110h bytes) come the

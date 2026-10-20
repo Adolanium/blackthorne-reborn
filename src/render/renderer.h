@@ -30,6 +30,7 @@ struct RenderOptions {
     // show the neighbouring screens (dimmed when dim_sides is set).
     int extra = 0;
     bool dim_sides = true;
+    bool no_shake = false;  // render_screen without the screen shake
 };
 
 // The 432x240 widescreen layout: 56 extra columns per side.
@@ -64,6 +65,20 @@ public:
     // where no tile pixel is set. pass: 0 = tiles without bit 3, 8 = tiles
     // with it (drawn in front of sprites), -1 = both.
     void render_layer(const Scene& scene, bool background, int pass, Image& out) const;
+
+    // The playfield split into the layers the original composes, at 1x, for
+    // renderers that compose them differently (src/render/hd.h). The map
+    // layers hold palette indices (decode with layer_index()); sprites and
+    // text hold colours. Transparent pixels have alpha 0.
+    struct Layers {
+        Image background_back, background_front, foreground_back, foreground_front;  // indices
+        Image sprites[4];  // by priority
+        Image text;
+        int view_x = 0, cam_y = 0, bg_x = 0, bg_y = 0;  // map coordinates of the top left
+        int shift = 0;  // where the 256-wide game screen starts in the view
+    };
+    void render_layers(const Scene& scene, const RenderOptions& opt, Layers& out) const;
+    static int layer_index(std::uint32_t pixel);  // -1 if transparent
 
 private:
     // A map layer: cells at `layer_offset` in the map segment, `row_bytes` per row,

@@ -73,6 +73,10 @@ F7 toggles widescreen (432x240). The extra columns show the neighbouring
 screens, dimmed so the active screen stays clear. Enemies there are not yet
 awake, because the game still only spawns the screen you are on.
 
+With an art pack (repainted levels at 4x, see
+[docs/VISUALS.md](docs/VISUALS.md)) in `packs/`, F6 switches between the
+repainted and the original art.
+
 Settings live in `settings.ini` in `%APPDATA%/Adolanium/BlackthorneReborn`,
 written on first run. Keys can be remapped there with SDL key names, and
 several keys can share an action, for example `key.jump=Space,Left Ctrl`.

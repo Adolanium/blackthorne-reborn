@@ -20,6 +20,8 @@
 #include "data/archive.h"
 #include "engine/game.h"
 #include "render/filters.h"
+#include "render/hd.h"
+#include "render/png.h"
 #include "render/renderer.h"
 
 namespace {
@@ -192,8 +194,24 @@ struct Settings {
     Filter filter = Filter::Sharp;
     bool wide = false;
     std::string soundfont;  // empty: the first .sf2 in the settings folder or next to the game
+    std::string pack;       // art pack folder; empty: the first in packs/ (settings folder, then the game's)
+    bool hd = true;         // use the art pack when there is one (F6)
     std::vector<Binding> bindings = default_bindings();
 };
+
+// The art pack: the configured one, else the first folder with a pack.json in
+// packs/ under the settings folder or next to the game.
+std::filesystem::path find_pack(const Settings& s, const std::filesystem::path& settings_dir) {
+    if (!s.pack.empty()) return std::filesystem::path(s.pack);
+    const char* base = SDL_GetBasePath();
+    for (const std::filesystem::path& dir : {settings_dir / "packs", std::filesystem::path(base ? base : "") / "packs"}) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dir, ec)) continue;
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
+            if (std::filesystem::exists(entry.path() / "pack.json", ec)) return entry.path();
+    }
+    return {};
+}
 
 // The SoundFont for the music: the configured one, else the first .sf2 found
 // in the settings folder or the game's folder.
@@ -219,6 +237,10 @@ Settings load_settings(const std::filesystem::path& path) {
         if (line.rfind("filter=", 0) == 0) {
             const int f = std::atoi(line.c_str() + 7);
             if (f >= 0 && f < static_cast<int>(Filter::Count)) s.filter = static_cast<Filter>(f);
+        } else if (line.rfind("pack=", 0) == 0) {
+            s.pack = line.substr(5);
+        } else if (line.rfind("hd=", 0) == 0) {
+            s.hd = std::atoi(line.c_str() + 3) != 0;
         } else if (line.rfind("soundfont=", 0) == 0) {
             s.soundfont = line.substr(10);
         } else if (line.rfind("widescreen=", 0) == 0) {
@@ -244,7 +266,7 @@ Settings load_settings(const std::filesystem::path& path) {
 
 void save_settings(const std::filesystem::path& path, const Settings& s) {
     std::ofstream out(path);
-    out << "filter=" << static_cast<int>(s.filter) << "\nwidescreen=" << (s.wide ? 1 : 0) << "\nsoundfont=" << s.soundfont
+    out << "filter=" << static_cast<int>(s.filter) << "\nwidescreen=" << (s.wide ? 1 : 0) << "\nsoundfont=" << s.soundfont << "\npack=" << s.pack << "\nhd=" << (s.hd ? 1 : 0)
         << '\n';
     for (const Binding& b : s.bindings) {
         out << "key." << b.name << '=';
@@ -255,13 +277,14 @@ void save_settings(const std::filesystem::path& path, const Settings& s) {
 
 }  // namespace
 
-// blackthorne [DATA.DAT] [--filter 0-3] [--wide 0|1] [--level hex]
-//             [--size WxH --ticks N --shot out.bmp [--input spec] [--keys frame:TEXT]] [--size WxH --ticks N --shot out.bmp]
-// The last three render one frame after N ticks to a BMP and exit (for tests).
+// blackthorne [DATA.DAT] [--filter 0-3] [--wide 0|1] [--level hex] [--pack dir]
+//             [--size WxH --ticks N --shot out.bmp [--frame out.png] [--input spec] [--keys frame:TEXT]]
+// --shot runs N ticks headless, saves the window to a BMP (and --frame the
+// rendered frame before display scaling to a PNG) and exits (for tests).
 int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
     int wide_arg = -1, filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
-    std::string shot, input_spec, keys_spec;
+    std::string shot, input_spec, keys_spec, pack_arg, frame_png;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         const char* next = i + 1 < argc ? argv[i + 1] : "";
@@ -272,6 +295,8 @@ int main(int argc, char** argv) {
         else if (a == "--shot") shot = next, ++i;
         else if (a == "--input") input_spec = next, ++i;
         else if (a == "--keys") keys_spec = next, ++i;
+        else if (a == "--pack") pack_arg = next, ++i;
+        else if (a == "--frame") frame_png = next, ++i;
         else if (a == "--size") {
             char* end = nullptr;
             width = static_cast<int>(std::strtol(next, &end, 10));
@@ -323,6 +348,22 @@ int main(int argc, char** argv) {
     display->filter = settings.filter;
     bt::RenderOptions render_opt;
     render_opt.extra = settings.wide ? bt::kWideExtra : 0;
+    std::unique_ptr<bt::ArtPack> pack;
+    if (const std::filesystem::path p = pack_arg.empty() ? find_pack(settings, settings_path.parent_path()) : std::filesystem::path(pack_arg); !p.empty() && std::filesystem::exists(p / "pack.json"))
+        pack = std::make_unique<bt::ArtPack>(p);
+    const bt::HdRenderer hd(renderer, pack.get(), pack ? pack->scale() : 1);
+    // One frame of the picture: HD with the art pack when there is one and it
+    // is on, otherwise the original 320x240. HD frames always use sharp scaling.
+    auto draw = [&](bt::Image& out) {
+        if (pack && settings.hd) {
+            hd.render_screen(game->display(), out, render_opt);
+            const Filter keep = display->filter;
+            display->filter = Filter::Sharp;
+            return keep;
+        }
+        renderer.render_screen(*game, out, render_opt);
+        return display->filter;
+    };
     // What the game asks of the host after a tick: sounds and music, saving
     // the level password, quitting. Returns false when the game quits.
     auto handle_events = [&]() {
@@ -383,10 +424,12 @@ int main(int argc, char** argv) {
                 return 2;
             }
             const bool keep_running = handle_events();
-            renderer.render_screen(*game, frame, render_opt);
+            const Filter keep = draw(frame);
             display->present(frame, false);
+            display->filter = keep;
             if (!keep_running) break;
         }
+        if (!frame_png.empty()) bt::write_png(frame_png, frame);  // the frame before display scaling
         SDL_Surface* pixels = SDL_RenderReadPixels(sdl, nullptr);
         const bool ok = pixels && SDL_SaveBMP(pixels, shot.c_str());
         SDL_DestroySurface(pixels);
@@ -420,6 +463,11 @@ int main(int argc, char** argv) {
                 const SDL_Keycode k = e.key.key;
                 if (k >= SDLK_A && k <= SDLK_Z) game->type_key(static_cast<char>('A' + (k - SDLK_A)));
                 else if (k >= SDLK_0 && k <= SDLK_9) game->type_key(static_cast<char>('0' + (k - SDLK_0)));
+            }
+            if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_F6 && pack) {
+                settings.hd = !settings.hd;
+                save_settings(settings_path, settings);
+                SDL_SetWindowTitle(window, settings.hd ? "Blackthorne Reborn - HD art" : "Blackthorne Reborn - original art");
             }
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_F7) {
                 settings.wide = !settings.wide;
@@ -459,8 +507,9 @@ int main(int argc, char** argv) {
         }
         if (acc > frame_seconds(*game) * 5) acc = 0;  // don't spiral after a stall
 
-        renderer.render_screen(*game, frame, render_opt);
+        const Filter keep = draw(frame);
         display->present(frame);
+        display->filter = keep;
     }
     if (pad) SDL_CloseGamepad(pad);
     display.reset();
