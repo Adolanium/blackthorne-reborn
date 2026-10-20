@@ -115,6 +115,10 @@ void Renderer::draw_hud(const Scene& scene, Image& out) const {
     };
     blit(side_panel_, kWidth + stretch, 0, side_panel_.width);
     blit(bottom_bar_, 0, kHeight, bottom_bar_.width + stretch);
+    // On the original the bar's last line from x=216 shares video memory with
+    // a page and shows black there (sub_14D46 copies over it).
+    for (int x = 216 + stretch; x < out.width; ++x)
+        out.pixels[static_cast<std::size_t>(kScreenHeight - 1) * out.width + x] = colour(scene.palette, 0);
     const int selected = ds.u16(0x1CB0);
     for (int di = 0; di < 0x10; di += 2) {
         const int x = 0x110 + stretch, y = 0xF * di;

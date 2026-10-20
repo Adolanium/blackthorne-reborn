@@ -80,18 +80,11 @@ The display also models how the original paints over time. Its full redraw
 repainted since then, under sprites or text, get the tile bit 3 order. Ours
 tracks which cells were repainted since the last full redraw.
 
-Remaining cosmetic differences come from how the original paints. It keeps two
-video pages and repaints only the screen cells marked dirty. A sprite is
-redrawn only where it overlaps such a cell (sub_15880). So where several
-actors overlap and only some are redrawn, or a tile changes without its
-cell being marked, the original shows stale pixels or a different overlap
-order for a few frames. Ours repaints the whole picture every frame from the
-same state. These spots are small and short, and the game state behind them
-is identical.
-
-The original's bottom bar also shares video memory with
-the first rows of a page. Its last line from x=216 picks up stray bytes
-after screen flips. Ours draws the bar intact.
+Two more painting details are modelled:
+- The original repaints only dirty cells. A dense check, every 10 frames on
+  sprite-heavy levels, found no frame where that shows.
+- The bottom bar's last line from x=216 shares video memory with a page and
+  is black on the original. Ours draws it black too.
 
 ## Running it
 
@@ -142,7 +135,7 @@ the tile animation buffer, then the tile graphics. So this matches too.
 
 Screens: on all 21 levels, 12 screens each over 3,000 frames of random
 play, what ours displays matches what the original displays pixel for
-pixel. The one exception is the known bottom-bar line.
+pixel, with no exceptions.
 
 Scenarios: Kyle was placed beside every kind of object in every level, 301
 scenarios of 2,300 frames each. All match.

@@ -17,15 +17,11 @@ from PIL import Image, ImageChops
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check  # noqa: E402
 
-# The original's bottom bar shares video memory with a page: its last line
-# from x=216 picks up stray bytes (a known cosmetic difference).
-KNOWN = (216, 239, 320, 240)
 
 
 def differing(a, b, out=None):
     a, b = a.convert('RGB'), b.convert('RGB')
     diff = ImageChops.difference(a, b).convert('L').point(lambda v: 255 if v else 0)
-    diff.paste(0, KNOWN)
     n = sum(1 for v in diff.getdata() if v)
     if n and out:
         w, h = a.size
