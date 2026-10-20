@@ -24,7 +24,12 @@
 namespace {
 
 constexpr const char* kDefaultData = "C:/Program Files (x86)/Blizzard Classics/Blackthorne/BTHORNE/DATA.DAT";
-constexpr double kTickSeconds = 1.0 / 30.0;  // the original runs at 60 Hz / 2
+// A frame lasts ds:68h vertical retraces of the 60 Hz display: 2 normally
+// (30 frames a second), 1 after the FASTER cheat.
+double frame_seconds(const bt::Game& game) {
+    const int retraces = game.machine().ds.u16(0x68);
+    return (retraces >= 1 && retraces <= 4 ? retraces : 2) / 60.0;
+}
 
 // Gamepad layout: d-pad / left stick move, A jump, X fire, Y draw/holster,
 // B use item, LB/RB cycle items, RT run, LT shoot backward, Start = Enter,
@@ -320,6 +325,8 @@ int main(int argc, char** argv) {
         display.reset();
         SDL_DestroyRenderer(sdl);
         SDL_DestroyWindow(window);
+        audio.close();
+        music.close();
         SDL_Quit();
         return ok ? 0 : 1;
     }
@@ -340,6 +347,11 @@ int main(int argc, char** argv) {
                 settings.filter = display->filter;
                 save_settings(settings_path, settings);
                 SDL_SetWindowTitle(window, (std::string("Blackthorne Reborn - ") + kFilterNames[static_cast<int>(display->filter)]).c_str());
+            }
+            if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {  // letters and digits for passwords and cheats
+                const SDL_Keycode k = e.key.key;
+                if (k >= SDLK_A && k <= SDLK_Z) game->type_key(static_cast<char>('A' + (k - SDLK_A)));
+                else if (k >= SDLK_0 && k <= SDLK_9) game->type_key(static_cast<char>('0' + (k - SDLK_0)));
             }
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_F7) {
                 settings.wide = !settings.wide;
@@ -365,8 +377,8 @@ int main(int argc, char** argv) {
         const Uint64 now = SDL_GetTicksNS();
         acc += static_cast<double>(now - last) / 1e9;
         last = now;
-        for (int steps = 0; acc >= kTickSeconds && steps < 5; ++steps) {
-            acc -= kTickSeconds;
+        for (int steps = 0; acc >= frame_seconds(*game) && steps < 5; ++steps) {
+            acc -= frame_seconds(*game);
             game->set_input(static_cast<std::uint16_t>(read_controls(settings.bindings) | read_gamepad(pad)));
             try {
                 game->tick();
@@ -381,7 +393,7 @@ int main(int argc, char** argv) {
             }
             game->vm().events().clear();
         }
-        if (acc > kTickSeconds * 5) acc = 0;  // don't spiral after a stall
+        if (acc > frame_seconds(*game) * 5) acc = 0;  // don't spiral after a stall
 
         renderer.render_screen(*game, frame, render_opt);
         display->present(frame);
@@ -390,6 +402,8 @@ int main(int argc, char** argv) {
     display.reset();
     SDL_DestroyRenderer(sdl);
     SDL_DestroyWindow(window);
+    audio.close();
+    music.close();
     SDL_Quit();
     return 0;
 }

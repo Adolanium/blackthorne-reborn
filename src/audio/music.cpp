@@ -51,7 +51,7 @@ Music::~Music() {
     quit_ = true;
     wake_.notify_all();
     if (thread_.joinable()) thread_.join();
-    if (stream_) SDL_DestroyAudioStream(stream_);
+    close();
     if (sf_) tsf_close(sf_);
 #ifdef _WIN32
     if (handle_) {
@@ -59,6 +59,11 @@ Music::~Music() {
         midiOutClose(static_cast<HMIDIOUT>(handle_));
     }
 #endif
+}
+
+void Music::close() {
+    if (stream_) SDL_DestroyAudioStream(stream_);  // waits for a running callback
+    stream_ = nullptr;
 }
 
 bool Music::load_soundfont(const std::filesystem::path& path) {

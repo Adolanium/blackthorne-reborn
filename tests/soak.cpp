@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
             const auto save = std::filesystem::temp_directory_path() / "btsoak.bts";
             for (int k = 0; !game.can_save(); ++k, ++t) {  // not in the middle of a fade, flip or menu
                 if (k > 200) throw std::runtime_error("never reached a frame where saving is possible");
-                game.set_input(0);
+                game.set_input(k % 2 ? 0x40 : 0);  // taps Fire, in case a message waits for a key
                 game.tick();
                 game.vm().events().clear();
             }

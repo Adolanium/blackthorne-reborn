@@ -39,6 +39,14 @@ public:
         kUseItem = 0x800, kItemPrev = 0x1000, kItemNext = 0x2000, kPause = 0x4000,
     };
     void set_input(std::uint16_t bits) { machine_->ds.set_u16(0x2A82, bits); }
+    // A key press as the keyboard handler records it (ds:64h and ds:66h):
+    // 'A'-'Z' and '0'-'9'. Used by password entry and the FASTER cheat.
+    void type_key(char c) {
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+            machine_->ds.set_u16(0x64, static_cast<std::uint8_t>(c));
+            machine_->ds.set_u16(0x66, static_cast<std::uint8_t>(c));
+        }
+    }
 
     // One frame: runs the original's control flow from one frame wait
     // (sub_10113 with the page-flip counter ds:5312h above zero) to the next.
@@ -84,6 +92,7 @@ private:
     void iteration();              // sub_10043, falling into sub_1008C
     void latch_input();            // sub_10A87
     void settle_input();           // sub_10A93
+    void typed_cheat();            // sub_190C1
     void level_frames();           // sub_1011B: level change / pause loop
     void change_level();           // sub_1011B, level-exit branch
     void flip_screen();            // sub_100B6, loc_100F5

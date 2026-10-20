@@ -31,6 +31,7 @@ public:
     Audio& operator=(const Audio&) = delete;
 
     bool open();  // opens the default playback device; false if unavailable
+    void close();  // before SDL_Quit, which would free the stream under us
 
     // MIDI music and effects (optional).
     Music* music = nullptr;

@@ -45,8 +45,11 @@ Audio::Audio(const Archive& archive) {
     for (int i = 0; i < kSampleCount; ++i) samples_.push_back(decode_voc(archive.entry(kFirstSampleEntry + i)));
 }
 
-Audio::~Audio() {
+Audio::~Audio() { close(); }
+
+void Audio::close() {
     if (stream_) SDL_DestroyAudioStream(stream_);
+    stream_ = nullptr;
 }
 
 bool Audio::open() {

@@ -257,6 +257,25 @@ void Game::load_level_data(int level_id, int x, int y) {
     settle_input();
 }
 
+// sub_190C1: typing the string at ds:70EEh ("FASTER") toggles the frame
+// divisor ds:68h between 2 (30 frames a second) and 1 (60).
+void Game::typed_cheat() {
+    DataSegment& ds = machine_->ds;
+    const std::uint8_t key = ds.u8(0x66);
+    if (!key) return;
+    const std::uint16_t at = ds.u16(0x70F5);
+    if (ds.u8(at) == key) {
+        ds.set_u16(0x70F5, static_cast<std::uint16_t>(at + 1));
+        if (ds.u8(static_cast<std::uint16_t>(at + 1)) == 0) {
+            ds.set_u16(0x68, ds.u16(0x68) ^ 3);
+            ds.set_u16(0x70F5, 0x70EE);
+        }
+    } else {
+        ds.set_u16(0x70F5, 0x70EE);
+    }
+    ds.set_u16(0x66, 0);
+}
+
 // sub_10A93: newly pressed bits from the latched input word (no new read).
 void Game::settle_input() {
     DataSegment& ds = machine_->ds;
@@ -682,6 +701,7 @@ void Game::iteration() {
     latch_input();
     // loc_12A12: P opens the "give up?" menu.
     if (!(d.u16(0x1CF6) & 0x20) && !(d.u16(0x318) & 3) && (d.u16(0x35C) & 0x4000)) menu(false);
+    typed_cheat();   // sub_190C1
     level_frames();  // sub_1011B
     vm_->run_scheduler();  // sub_1601A
     // sub_1290E: Esc opens "quit to main menu?" (or leaves special scenes).

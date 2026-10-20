@@ -28,6 +28,7 @@ public:
 
     // Uses the SoundFont when one is given and loads, else the system synth.
     bool open(const std::filesystem::path& soundfont = {});
+    void close();  // before SDL_Quit, which would free the stream under us
     // Loads a SoundFont without opening an audio device (render() drives it).
     bool open_offline(const std::filesystem::path& soundfont);
     bool using_soundfont() const { return sf_ != nullptr; }
