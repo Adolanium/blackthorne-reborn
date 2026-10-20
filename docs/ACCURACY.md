@@ -77,5 +77,8 @@ Since then it has caught:
   were not kept.
 - Several smaller ordering details (see the git log).
 
-From boot through the title, the intro and play on the tested levels, the
-game state now matches the original word for word.
+Current result: on all 21 levels in the password table, 4,000 frames each
+of random play (movement, jumping, running, shooting, items, and the level
+changes that random play triggers), the game state matches the original
+word for word. That run covers boot, the intro, the title menu and a
+password restart through the give-up menu.

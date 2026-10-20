@@ -31,7 +31,8 @@ adds presentation upgrades on top.
 - [x] Pause and the in-game Esc menu flow, black-frame transitions
 - [x] Frame-exact main loop (screen flips, fades, menus) checked against the
       original running headless (docs/ACCURACY.md)
-- [ ] Extend the accuracy check to longer play and every level
+- [x] Accuracy check on every level (4,000 frames of random play each)
+- [ ] Longer and scripted play-throughs (bosses, elevators, endings)
 - [ ] Remaining open details: palette id 0x48 (colour 0x0707), stray intro glyphs
 
 ## Phase 3: Make it beautiful
