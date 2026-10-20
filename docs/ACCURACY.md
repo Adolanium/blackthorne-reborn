@@ -155,6 +155,13 @@ Other flows that match frame for frame:
 
 Sound effect requests and music starts and stops match too.
 
+The real executable is played as well. `tools/playtest.py` runs
+blackthorne.exe headless on every level, plus boot through the title into
+the first level, for 4,000 frames of scripted play each. These runs use the
+same ticks, sound, music, saving, rendering and presentation as an
+interactive session. All runs end cleanly on a real picture, including the
+ending level and the boss room.
+
 Current result: on all 21 levels in the password table, 4,000 frames each
 of random play (movement, jumping, running, shooting, items, and the level
 changes that random play triggers), the game state matches the original

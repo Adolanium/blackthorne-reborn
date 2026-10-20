@@ -323,7 +323,26 @@ int main(int argc, char** argv) {
     display->filter = settings.filter;
     bt::RenderOptions render_opt;
     render_opt.extra = settings.wide ? bt::kWideExtra : 0;
+    // What the game asks of the host after a tick: sounds and music, saving
+    // the level password, quitting. Returns false when the game quits.
+    auto handle_events = [&]() {
+        bool keep_running = true;
+        for (const bt::VmEvent& ev : game->vm().events()) {
+            if (ev.kind == bt::VmEvent::Kind::Quit) keep_running = false;
+            if (ev.kind == bt::VmEvent::Kind::SavePassword) {  // sub_10C0D writes ds:64E7h
+                const bt::DataSegment& ds = game->machine().ds;
+                const char pw[4] = {static_cast<char>(ds.u8(0x64E7)), static_cast<char>(ds.u8(0x64E8)),
+                                    static_cast<char>(ds.u8(0x64E9)), static_cast<char>(ds.u8(0x64EA))};
+                std::ofstream(password_path, std::ios::binary).write(pw, 4);
+            }
+            audio.handle(ev, game->machine().ds);
+        }
+        game->vm().events().clear();
+        return keep_running;
+    };
     if (!shot.empty()) {
+        // Headless run: the same ticks, events, rendering and presentation as
+        // the interactive loop, frame after frame, then the last frame saved.
         bt::Image frame;
         // Scripted input as bttrace takes it ("from-to:hexbits,..."; tick k
         // uses the bits at k - 1) and typed text ("frame:TEXT", one key per
@@ -357,11 +376,17 @@ int main(int argc, char** argv) {
             game->set_input(static_cast<std::uint16_t>(bits));
             const int k = t - 1 - keys_from;
             if (keys_from >= 0 && k >= 0 && k < static_cast<int>(keys.size())) game->type_key(keys[static_cast<std::size_t>(k)]);
-            game->tick();
-            game->vm().events().clear();
+            try {
+                game->tick();
+            } catch (const std::exception& ex) {
+                std::fprintf(stderr, "engine error at tick %d: %s\n", t, ex.what());
+                return 2;
+            }
+            const bool keep_running = handle_events();
+            renderer.render_screen(*game, frame, render_opt);
+            display->present(frame, false);
+            if (!keep_running) break;
         }
-        renderer.render_screen(*game, frame, render_opt);
-        display->present(frame, false);
         SDL_Surface* pixels = SDL_RenderReadPixels(sdl, nullptr);
         const bool ok = pixels && SDL_SaveBMP(pixels, shot.c_str());
         SDL_DestroySurface(pixels);
@@ -430,17 +455,7 @@ int main(int argc, char** argv) {
                 running = false;
                 break;
             }
-            for (const bt::VmEvent& ev : game->vm().events()) {
-                if (ev.kind == bt::VmEvent::Kind::Quit) running = false;
-                if (ev.kind == bt::VmEvent::Kind::SavePassword) {  // sub_10C0D writes ds:64E7h
-                    const bt::DataSegment& ds = game->machine().ds;
-                    const char pw[4] = {static_cast<char>(ds.u8(0x64E7)), static_cast<char>(ds.u8(0x64E8)),
-                                        static_cast<char>(ds.u8(0x64E9)), static_cast<char>(ds.u8(0x64EA))};
-                    std::ofstream(password_path, std::ios::binary).write(pw, 4);
-                }
-                audio.handle(ev, game->machine().ds);
-            }
-            game->vm().events().clear();
+            if (!handle_events()) running = false;
         }
         if (acc > frame_seconds(*game) * 5) acc = 0;  // don't spiral after a stall
 
