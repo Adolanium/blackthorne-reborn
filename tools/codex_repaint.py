@@ -20,6 +20,7 @@ anything. The images come from the original game: keep them git-ignored.
 
 import argparse
 import concurrent.futures
+import hashlib
 import os
 import shutil
 import subprocess
@@ -138,7 +139,30 @@ def jobs_in(work, only):
             if os.path.isdir(os.path.join(base, "in")):
                 for name in sorted(os.listdir(os.path.join(base, "in"))):
                     jobs.append((layer, base, name))
-    return [j for j in jobs if not os.path.exists(os.path.join(j[1], "out", j[2]))]
+    return jobs
+
+
+def digest(job):
+    with open(os.path.join(job[1], "in", job[2]), "rb") as f:
+        return hashlib.sha1(f.read()).hexdigest()
+
+
+def share_duplicates(jobs):
+    """Identical inputs (the same scene shown on several screens) share one
+    painting: the first one's, so they look the same everywhere."""
+    first = {}
+    copied = 0
+    for j in jobs:
+        d = digest(j)
+        out = os.path.join(j[1], "out", j[2])
+        if d not in first:
+            if os.path.exists(out):
+                first[d] = out
+            continue
+        if os.path.abspath(first[d]) != os.path.abspath(out):
+            shutil.copy(first[d], out)
+            copied += 1
+    return copied
 
 
 def run_job(job, args):
@@ -213,13 +237,23 @@ def main():
     for name in ("fg.png", "bg.png", "sprites.png"):
         if not os.path.exists(os.path.join(args.style, name)):
             sys.exit(f"missing {os.path.join(args.style, name)}")
-    jobs = jobs_in(args.work, only)
-    log(f"{len(jobs)} job(s) to do, {args.jobs} at a time")
+    every = jobs_in(args.work, only)
+    share_duplicates(every)
+    seen, jobs = set(), []
+    for j in every:
+        d = digest(j)
+        if d in seen:
+            continue
+        seen.add(d)
+        if not os.path.exists(os.path.join(j[1], "out", j[2])):
+            jobs.append(j)
+    log(f"{len(jobs)} job(s) to do ({len(every) - len(seen)} duplicates share a painting), {args.jobs} at a time")
     failed = 0
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         for ok in pool.map(lambda j: safe_job(j, args), jobs):
             failed += not ok
-    log(f"finished: {len(jobs) - failed} done, {failed} failed")
+    copied = share_duplicates(every)
+    log(f"finished: {len(jobs) - failed} done, {failed} failed, {copied} duplicate(s) copied")
     sys.exit(1 if failed else 0)
 
 
