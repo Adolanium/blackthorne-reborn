@@ -6,6 +6,7 @@
 #include <string>
 
 #include "engine/machine.h"
+#include "render/filters.h"
 #include "render/png.h"
 
 namespace bt {
@@ -45,6 +46,8 @@ ArtPack::ArtPack(std::filesystem::path dir) : dir_(std::move(dir)) {
         const std::size_t colon = json.find(':', at);
         if (colon != std::string::npos) scale_ = std::clamp(std::atoi(json.c_str() + colon + 1), 1, 8);
     }
+    const std::size_t smooth = json.find("\"smooth_text\"");
+    smooth_text_ = smooth != std::string::npos && json.find("true", smooth) < json.find_first_of(",}", smooth);
     std::error_code ec;
     has_sprites_ = std::filesystem::is_directory(dir_ / "sprites", ec);
     std::ifstream pal(dir_ / "hud" / "hud.pal", std::ios::binary);
@@ -315,7 +318,18 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
     map_pass(true, true);
     map_pass(false, true);
     sprite_pass(3);
-    image_pass(layers.text, false);
+    if (pack_ && pack_->smooth_text() && S == 4 && opt.text) {
+        // Text rounded off: Scale2x twice, drawn over the playfield.
+        scale2x(layers.text, text2_);
+        scale2x(text2_, text4_);
+        for (int y = 0; y < play.height; ++y)
+            for (int x = 0; x < play.width; ++x) {
+                const std::uint32_t p = text4_.pixels[static_cast<std::size_t>(y) * text4_.width + x];
+                if (p >> 24) play.pixels[static_cast<std::size_t>(y) * play.width + x] = p;
+            }
+    } else {
+        image_pass(layers.text, false);
+    }
     // Widescreen: the columns beside the game screen are dimmed, as in
     // Renderer::render_screen.
     if (opt.extra && opt.dim_sides) {
@@ -428,10 +442,25 @@ void HdRenderer::draw_hud(const Scene& scene, const Image& classic, const std::a
         }
         if (di == selected) stamp(base_.selection_frame(), pack_->hud("selection", 32, 32), x, y, 0xF0);
     }
-    // The item name keeps the original font.
+    // The item name keeps the original font (rounded off with smooth_text).
     const int cells = 16 + stretch / 8;
-    for (int y = Renderer::kHeight + 4; y < Renderer::kHeight + 12; ++y)
-        for (int x = 64; x < 64 + cells * 8; ++x) block(x, y, classic.pixels[static_cast<std::size_t>(y) * classic.width + x]);
+    if (pack_->smooth_text() && S == 4) {
+        Image name1, name2, name4;
+        name1.resize(cells * 8 + 2, 10);  // a pixel of the bar around it, for Scale2x's neighbours
+        for (int y = 0; y < 10; ++y)
+            for (int x = 0; x < name1.width; ++x)
+                name1.pixels[static_cast<std::size_t>(y) * name1.width + x] =
+                    classic.pixels[static_cast<std::size_t>(Renderer::kHeight + 3 + y) * classic.width + 63 + x];
+        scale2x(name1, name2);
+        scale2x(name2, name4);
+        for (int y = 4; y < 36; ++y)
+            for (int x = 4; x < name4.width - 4; ++x)
+                page.pixels[static_cast<std::size_t>((Renderer::kHeight + 3) * 4 + y) * page.width + 63 * 4 + x] =
+                    name4.pixels[static_cast<std::size_t>(y) * name4.width + x];
+    } else {
+        for (int y = Renderer::kHeight + 4; y < Renderer::kHeight + 12; ++y)
+            for (int x = 64; x < 64 + cells * 8; ++x) block(x, y, classic.pixels[static_cast<std::size_t>(y) * classic.width + x]);
+    }
 }
 
 }  // namespace bt

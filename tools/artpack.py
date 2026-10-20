@@ -67,10 +67,12 @@ def layer_path(root, level, layer):
     return os.path.join(root, "levels", level, layer + ".png")
 
 
-def write_pack_json(pack):
+def write_pack_json(pack, smooth_text=True):
+    """smooth_text rounds off the original font; the round-trip pack keeps
+    it off so it stays pixel-exact."""
     os.makedirs(pack, exist_ok=True)
     with open(os.path.join(pack, "pack.json"), "w") as f:
-        json.dump({"scale": SCALE}, f)
+        json.dump({"scale": SCALE, "smooth_text": smooth_text}, f)
         f.write("\n")
 
 
@@ -240,7 +242,7 @@ def cmd_stitch(args):
 
 
 def cmd_nearest(args):
-    write_pack_json(args.pack)
+    write_pack_json(args.pack, smooth_text=False)
     for level in level_ids(args.export, args.levels):
         for layer in LAYERS:
             src = layer_path(args.export, level, layer)
