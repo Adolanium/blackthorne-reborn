@@ -15,16 +15,42 @@ Entertainment. Blackthorne and all game assets are Blizzard's property.
 
 - `docs/FORMATS.md`: reverse-engineered data formats and their status
 - `docs/ROADMAP.md`: plan and milestones
-- `tools/`: extraction and inspection scripts
+- `src/data/`: format library (archive, LZSS, levels, tiles, sprites)
+- `src/viewer/`: SDL3 level and sprite viewer
+- `tools/`: Python extraction and inspection scripts
 - `re/`: local analysis workspace (game binary, IDA database and listing are git-ignored)
 
-## Extract the data
+## Build
+
+Requires CMake 3.24+ and a C++20 compiler (tested with Visual Studio 2026).
+SDL 3 is downloaded and built automatically.
+
+```
+cmake -S . -B build
+cmake --build build --config Release
+```
+
+## Level viewer
+
+```
+build/Release/btviewer.exe [path/to/DATA.DAT]
+```
+
+Without an argument it looks in the default Blizzard Classics install folder.
+Arrows/WASD or mouse drag to scroll, wheel to zoom, PgUp/PgDn to change level,
+B/F to toggle background/foreground, Tab for the sprite browser (Left/Right
+to change bank). `--level N --sprites --bank N --shot out.bmp` renders one
+frame to a file.
+
+## Python tools
+
+### Extract the data
 
 ```
 python -I tools/datdump.py "<game dir>/BTHORNE/DATA.DAT" extracted
 ```
 
-## Export sprite sheets
+### Export sprite sheets
 
 ```
 python -I tools/sprites.py extracted out/sprites

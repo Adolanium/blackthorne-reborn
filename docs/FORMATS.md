@@ -57,9 +57,25 @@ Mode 13h unchained into Mode X with a custom 12-register CRTC table at
 
 ## Level descriptor (partly traced, `sub_105B4` and helpers)
 
-Loaded to `ds:1CEEh`. Parsed in this order (implemented in `tools/sprites.py`):
+Loaded to `ds:1CEEh` (linear 0x2022E; data segment base 0x1E540). Parsed by
+`src/data/level.cpp` and `tools/sprites.py`.
 
-1. 0x36-byte header (fields **open**), then 14-byte records until `FFFF`.
+Header, 0x36 bytes (u16 little-endian unless noted; ids are 1-based):
+
+| Offset | Meaning |
+|---|---|
+| 0x08 | flags (`word_20236`; bit 0x100 selects HUD set 0x123 instead of 0x121) |
+| 0x1C, 0x1E | foreground layer width, height (metatiles) |
+| 0x21 | foreground layer id |
+| 0x23 | tileset id; id+1 is the tile mask resource |
+| 0x25 | metatile table id |
+| 0x27, 0x29 | background layer width, height |
+| 0x2C | background layer id (`FFFF`/negative = none) |
+| others | **open** |
+
+Body:
+
+1. 14-byte records until `FFFF`.
 2. `sub_10760`: `(u16 id, u8 slot)` until `FFFF`. Loads level resources; a
    768-byte palette goes to colour 0, 48-byte fragments to colour `slot`
    (e.g. Kyle's colours, entry 78, at slot 128).
@@ -69,6 +85,23 @@ Loaded to `ds:1CEEh`. Parsed in this order (implemented in `tools/sprites.py`):
 6. `sub_108A5`: sprite banks, 5-byte records `(u16 id, u8 w8, u8 h8, u8 flag)`
    until `FFFF`. Frame = `w8*8` x `h8*8` pixels, `w8*h8*64` bytes.
 7. Remaining helpers (`sub_108F3` onward) **open**.
+
+## Tiles and maps (confirmed, `sub_1438A`)
+
+- Tileset: 8x8 tiles, 64 bytes each, Mode X planar (4 planes x 8 rows x
+  2 bytes, x = `col*4 + plane`), 4-bit pixel values, 0 = transparent.
+- Tile mask (tileset id + 1): 8 bytes per tile, one bit per pixel, used by the
+  blitter to skip transparent pixels.
+- Metatile table: 8 bytes per metatile = four tile words (TL, TR, BL, BR),
+  16x16 pixels.
+- Tile word: bits 6-15 tile index, bits 4-5 select one of four blitters
+  (x/y flip), bit 3 **open**, bits 0-2 palette row (colour = pixel + row*16).
+- Map layer: `width*height` u16 cells, row-major. Low 12 bits = metatile.
+  The foreground layer carries flags in bits 12-15 (seen: 0x1000, 0x2000,
+  0x8000; meaning **open**, likely collision/priority). Background is drawn
+  first, foreground on top.
+- Black areas remain in some maps; whether the game draws a backdrop there is
+  **open**.
 
 ## Sprite banks (confirmed)
 
