@@ -154,6 +154,8 @@ Vm::Vm(Machine& machine) : m_(machine), ds_(machine.ds), scripts_(machine.script
     table_[0xBE] = &Vm::op_spawn_store<0x0A>;
     table_[0xBF] = &Vm::op_spawn_store<0x0C>;
     register_world_ops();
+    register_anim_ops();
+    register_actor_ops();
 }
 
 std::uint8_t Vm::script_byte(std::uint16_t seg, std::uint16_t ip) const {
@@ -217,6 +219,10 @@ void Vm::run_actor(int slot) {
     seg_ = ds_.field(field::kScriptSeg, slot);
     ip_ = ds_.field(field::kScriptIp, slot);
     steps_ = 0;
+    execute();
+}
+
+void Vm::execute() {
     for (;;) {
         last_op_ = fetch8();
         ++steps_;

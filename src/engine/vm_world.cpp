@@ -217,6 +217,9 @@ Vm::Flow Vm::op_if_anim_idle() {
 // sub_17FB8 family: scan cells of row y from x0 to x1 in 16-pixel steps, the
 // last step clamped to exactly x1.
 bool Vm::scan_row(std::uint8_t list, int y, int x0, int x1) {
+    ds_.set_u16(g::kScratch12, list);
+    ds_.set_u16(0x14, static_cast<std::uint16_t>(y));
+    ds_.set_u16(0x16, static_cast<std::uint16_t>(x1));
     for (int x = x0;;) {
         const std::uint8_t cls = m_.pixel_class(static_cast<std::uint16_t>(x), static_cast<std::uint16_t>(y));
         if (in_class_list(list, cls)) {
@@ -231,6 +234,9 @@ bool Vm::scan_row(std::uint8_t list, int y, int x0, int x1) {
 
 // sub_17F2F family: scan a column from y0 to y1 the same way.
 bool Vm::scan_column(std::uint8_t list, int x, int y0, int y1) {
+    ds_.set_u16(g::kScratch12, list);
+    ds_.set_u16(0x14, static_cast<std::uint16_t>(x));
+    ds_.set_u16(0x16, static_cast<std::uint16_t>(y1));
     for (int y = y0;;) {
         const std::uint8_t cls = m_.pixel_class(static_cast<std::uint16_t>(x), static_cast<std::uint16_t>(y));
         if (in_class_list(list, cls)) {

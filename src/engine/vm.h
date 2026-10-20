@@ -68,6 +68,15 @@ public:
     // ends its turn (sub_1603F's tail plus the interpreter loop).
     void run_actor(int slot);
 
+    // Per-tick routines driven by the game loop (see docs/vm/README.md).
+    int spawn_actor(int type, int record, std::uint16_t flags);  // sub_1115D; slot or -1
+    void despawn_actor(int slot);                                // sub_11560
+    void run_checks(int slot);                                   // sub_17AE9 (pass in ds:33Eh)
+    void spawn_visible_records();                                // sub_1130E
+    void mark_offscreen_actors();                                // loc_114AE
+    void anim_tick(int slot);                                    // sub_1207C
+    void physics(int slot);                                      // loc_12404
+
     // Instructions executed by the last run_actor call (for tests/tracing).
     int last_steps() const { return steps_; }
 
@@ -101,6 +110,8 @@ private:
     std::uint16_t rand16();
 
     void jump(std::uint16_t target) { ip_ = target; }
+    // The interpreter loop: runs from seg_:ip_ until a handler ends the turn.
+    void execute();
 
     // Handlers.
     Flow op_unimplemented();
@@ -155,6 +166,64 @@ private:
     bool probe_point_actor(std::uint8_t list, int px, int py);  // sub_183BE / sub_1844F
     void redraw_tile(std::uint16_t tx, std::uint16_t ty, std::uint16_t v);  // sub_18910
     void rebuild_palette();                                // sub_1266C
+
+    // vm_anim.cpp: animation scripts, sprite parts, frames and physics.
+    void register_anim_ops();
+    Flow op_anim_tick();                                   // 0x2A
+    template <int Dest, bool AddWhenFlipped> Flow op_vflip_add();  // 0xC4-0xCB
+    Flow op_part_cells();                                  // 0xCF
+    template <bool Vertical> Flow op_velocity();           // 0xD0, 0xD2
+    template <bool Vertical> Flow op_part_offsets();       // 0xD1, 0xD3
+    Flow op_part_palettes();                               // 0xD4
+    Flow op_part_filter();                                 // 0xD5
+    Flow op_anim_end_tick();                               // 0xD6
+    Flow op_anim_wait();                                   // 0xD7
+    template <std::uint16_t Bits> Flow op_part_flip();     // 0xD8-0xDA
+    Flow op_part_groups();                                 // 0xDB
+    Flow op_frame();                                       // 0xDC
+    Flow op_part_sizes();                                  // 0xDD
+    Flow op_part_priority();                               // 0xDE
+    Flow op_select_bank();                                 // 0xDF
+    Flow op_part_hide();                                   // 0xE0
+    Flow op_part_show();                                   // 0xE1
+    Flow op_part_xor();                                    // 0xE2
+    Flow op_if_anim_waiting();                             // 0xE4
+
+    void load_frame(int slot, std::uint16_t frame);        // sub_15BF2
+    void mirror_parts(int slot, bool vertical);            // the part half of sub_1103A / sub_110B0
+
+    // vm_actors.cpp: actor lifetime, event checks, collision, scans.
+    void register_actor_ops();
+    Flow op_despawn_self();                                // 0x0E
+    Flow op_spawn();                                       // 0x10
+    template <bool KyleOnly, bool ByMask> Flow op_event_overlap();  // 0x17, 0x1A, 0x2F, 0x30
+    template <int Axis> Flow op_event_terrain();           // 0x2D, 0x2E, 0x33
+    template <bool Target, bool Negate> Flow op_if_onscreen();  // 0xC0-0xC3
+    template <bool KyleOnly> Flow op_scan();               // 0xCC, 0xF8
+    Flow op_indexed_store();                               // 0xCD
+    Flow op_indexed_load();                                // 0xCE
+    Flow op_spawn_relative();                              // 0xE3
+    Flow op_spawn_record();                                // 0xE5
+    template <bool ByMask> Flow op_find_overlap();         // 0xEF, 0xF0
+    Flow op_palette();                                     // 0xF1
+    Flow op_forget_record();                               // 0xF2
+
+    bool alloc_frame_buffer(std::uint16_t bank, std::uint16_t& seg, std::uint16_t& off);  // sub_11F9E
+    bool alloc_parts(int count, int& first);               // sub_116A8 / loc_11652
+    void set_part_size(int p, bool large);                 // sub_11FF4
+    void finish_spawn(int slot);                           // loc_1706D tail
+    int spawn_from_record(int r);
+    bool check_record(int r);                              // sub_11380
+    void release_palette(int slot);                        // sub_1153A
+    int acquire_palette(std::uint16_t id);                 // sub_121F2 + sub_19062
+    void retint_palette(std::uint16_t start, int colours); // sub_12671
+    std::uint16_t check_bit() const;
+    void finish_check(bool fire);
+    void snap_horizontal(int slot, int dir);               // sub_17E94
+    void snap_vertical(int slot, int dir);                 // sub_17EDC
+    int solid_actor_hit(int axis, std::uint8_t list, int& dir);
+    void push_out(int axis, int other, int dir);           // sub_18222 / sub_1825E
+    bool onscreen(int slot) const;
 
     std::uint16_t dest_addr(int dest);                  // reads a field byte or addr16
     std::uint16_t bit_mask(std::uint8_t b) const { return ds_.u16(static_cast<std::uint16_t>(ds_addr::kBitMasks + b)); }

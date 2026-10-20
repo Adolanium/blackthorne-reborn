@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 #include "data/archive.h"
 #include "engine/data_segment.h"
@@ -16,6 +17,23 @@ struct Machine {
     DataSegment ds;
     std::array<std::uint8_t, 0x10000> map{};
     Bytes scripts;
+
+    // Sprite memory. Segment numbers stored in the data segment are these
+    // symbolic values; sprite_data() maps them back to buffers.
+    static constexpr std::uint16_t kFrameSeg = 0x5000;   // ds:259Eh: actor frame buffers
+    static constexpr std::uint16_t kStaticSeg = 0x6000;  // ds:25A0h: preloaded single-frame sprites
+    std::array<std::uint8_t, 0x10000> frames{};
+    std::array<std::uint8_t, 0x10000> statics{};
+    // Sprite banks by slot (the byte index into ds:1152h divided by 2), raw
+    // frames as stored in DATA.DAT; the game keeps these in EMS.
+    std::vector<Bytes> banks = std::vector<Bytes>(16);
+
+    // Pixel data for a (segment, offset) pair as stored in part fields 852h/752h.
+    const std::uint8_t* sprite_data(std::uint16_t seg, std::uint16_t off) const {
+        if (seg == kFrameSeg) return frames.data() + off;
+        if (seg == kStaticSeg) return statics.data() + off;
+        return nullptr;
+    }
 
     std::uint16_t map_u16(std::uint16_t off) const {
         return static_cast<std::uint16_t>(map[off] | (map[static_cast<std::uint16_t>(off + 1)] << 8));
