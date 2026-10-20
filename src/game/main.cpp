@@ -164,32 +164,42 @@ void fail(const std::string& message) {
 }
 
 // settings.ini in the user's preference folder: one "key=value" per line.
-Filter load_filter(const std::filesystem::path& path) {
+struct Settings {
+    Filter filter = Filter::Sharp;
+    bool wide = false;
+};
+
+Settings load_settings(const std::filesystem::path& path) {
+    Settings s;
     std::ifstream in(path);
-    for (std::string line; std::getline(in, line);)
+    for (std::string line; std::getline(in, line);) {
         if (line.rfind("filter=", 0) == 0) {
             const int f = std::atoi(line.c_str() + 7);
-            if (f >= 0 && f < static_cast<int>(Filter::Count)) return static_cast<Filter>(f);
+            if (f >= 0 && f < static_cast<int>(Filter::Count)) s.filter = static_cast<Filter>(f);
+        } else if (line.rfind("widescreen=", 0) == 0) {
+            s.wide = std::atoi(line.c_str() + 11) != 0;
         }
-    return Filter::Sharp;
+    }
+    return s;
 }
 
-void save_filter(const std::filesystem::path& path, Filter filter) {
-    std::ofstream(path) << "filter=" << static_cast<int>(filter) << '\n';
+void save_settings(const std::filesystem::path& path, const Settings& s) {
+    std::ofstream(path) << "filter=" << static_cast<int>(s.filter) << "\nwidescreen=" << (s.wide ? 1 : 0) << '\n';
 }
 
 }  // namespace
 
-// blackthorne [DATA.DAT] [--filter 0-3] [--level hex] [--size WxH --ticks N --shot out.bmp]
+// blackthorne [DATA.DAT] [--filter 0-3] [--wide 0|1] [--level hex] [--size WxH --ticks N --shot out.bmp]
 // The last three render one frame after N ticks to a BMP and exit (for tests).
 int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
-    int filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
+    int wide_arg = -1, filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
     std::string shot;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         const char* next = i + 1 < argc ? argv[i + 1] : "";
         if (a == "--filter") filter_arg = std::atoi(next), ++i;
+        else if (a == "--wide") wide_arg = std::atoi(next), ++i;
         else if (a == "--level") level_arg = static_cast<int>(std::strtol(next, nullptr, 16)), ++i;
         else if (a == "--ticks") ticks_arg = std::atoi(next), ++i;
         else if (a == "--shot") shot = next, ++i;
@@ -231,15 +241,19 @@ int main(int argc, char** argv) {
     audio.open();  // the game runs silently if there is no audio device
     if (music.open()) audio.music = &music;
     auto display = std::make_unique<Display>(sdl);
-    display->filter = filter_arg >= 0 && filter_arg < static_cast<int>(Filter::Count) ? static_cast<Filter>(filter_arg)
-                                                                                         : load_filter(settings_path);
+    Settings settings = load_settings(settings_path);
+    if (filter_arg >= 0 && filter_arg < static_cast<int>(Filter::Count)) settings.filter = static_cast<Filter>(filter_arg);
+    if (wide_arg >= 0) settings.wide = wide_arg != 0;
+    display->filter = settings.filter;
+    bt::RenderOptions render_opt;
+    render_opt.extra = settings.wide ? bt::kWideExtra : 0;
     if (!shot.empty()) {
         bt::Image frame;
         for (int t = 0; t < ticks_arg; ++t) {
             game->tick();
             game->vm().events().clear();
         }
-        renderer.render_screen(*game, frame);
+        renderer.render_screen(*game, frame, render_opt);
         display->present(frame, false);
         SDL_Surface* pixels = SDL_RenderReadPixels(sdl, nullptr);
         const bool ok = pixels && SDL_SaveBMP(pixels, shot.c_str());
@@ -262,8 +276,15 @@ int main(int argc, char** argv) {
                 SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_F8) {
                 display->filter = static_cast<Filter>((static_cast<int>(display->filter) + 1) % static_cast<int>(Filter::Count));
-                save_filter(settings_path, display->filter);
+                settings.filter = display->filter;
+                save_settings(settings_path, settings);
                 SDL_SetWindowTitle(window, (std::string("Blackthorne Reborn - ") + kFilterNames[static_cast<int>(display->filter)]).c_str());
+            }
+            if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_F7) {
+                settings.wide = !settings.wide;
+                render_opt.extra = settings.wide ? bt::kWideExtra : 0;
+                save_settings(settings_path, settings);
+                SDL_SetWindowTitle(window, settings.wide ? "Blackthorne Reborn - widescreen" : "Blackthorne Reborn - 4:3");
             }
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !pad) pad = SDL_OpenGamepad(e.gdevice.which);
             if (e.type == SDL_EVENT_GAMEPAD_REMOVED && pad && SDL_GetGamepadID(pad) == e.gdevice.which) {
@@ -301,7 +322,7 @@ int main(int argc, char** argv) {
         }
         if (acc > kTickSeconds * 5) acc = 0;  // don't spiral after a stall
 
-        renderer.render_screen(*game, frame);
+        renderer.render_screen(*game, frame, render_opt);
         display->present(frame);
     }
     if (pad) SDL_CloseGamepad(pad);

@@ -60,7 +60,11 @@ F8 cycles the display filter, and the choice is remembered:
 - **Smooth** runs Scale2x twice to round off the pixel staircases.
 - **CRT** adds scanlines.
 
-Options are `blackthorne [DATA.DAT] [--filter 0-3] [--level hex]`. `--level`
+F7 toggles widescreen (432x240). The extra columns show the neighbouring
+screens, dimmed so the active screen stays clear. Enemies there are not yet
+awake, because the game still only spawns the screen you are on.
+
+Options are `blackthorne [DATA.DAT] [--filter 0-3] [--wide 0|1] [--level hex]`. `--level`
 starts a level directly, for example `--level C1`.
 
 Gamepads work too: d-pad or left stick to move, A jump, X fire, Y draw or

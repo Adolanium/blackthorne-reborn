@@ -26,7 +26,14 @@ struct RenderOptions {
     bool foreground = true;
     bool sprites = true;
     bool text = true;
+    // Widescreen: extra columns on each side of the 256-wide playfield. They
+    // show the neighbouring screens (dimmed when dim_sides is set).
+    int extra = 0;
+    bool dim_sides = true;
 };
+
+// The 432x240 widescreen layout: 56 extra columns per side.
+constexpr int kWideExtra = 56;
 
 // Draws the game's 256x224 playfield the way the original composes it: map
 // layers from the live map segment, sprite parts from the part pool, the text
@@ -37,10 +44,12 @@ public:
 
     explicit Renderer(const Archive& archive);
 
+    // The playfield, kWidth + 2 * opt.extra wide.
     void render(const Game& game, Image& out, const RenderOptions& opt = {}) const;
 
     // The whole 320x240 screen: playfield, right inventory panel and bottom
     // bar (for levels with a HUD; other levels show the playfield centred).
+    // opt.extra widens it by 2 * extra.
     static constexpr int kScreenWidth = 320, kScreenHeight = 240;
     void render_screen(const Game& game, Image& out, const RenderOptions& opt = {}) const;
 
@@ -49,8 +58,8 @@ private:
     // `width` x `height` cells, viewed from (cam_x, cam_y).
     void draw_layer(const Game& game, std::uint16_t layer_offset, int row_bytes, int width, int height, int cam_x, int cam_y,
                     Image& out) const;
-    void draw_parts(const Game& game, Image& out) const;
-    void draw_text(const Game& game, Image& out) const;
+    void draw_parts(const Game& game, int cam_x, int cam_y, Image& out) const;
+    void draw_text(const Game& game, int x0, Image& out) const;
 
     void draw_hud(const Game& game, Image& out) const;
     void stamp(const Game& game, Image& out, const std::vector<std::uint8_t>& pixels, int size, int x, int y,
