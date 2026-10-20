@@ -179,7 +179,7 @@ public:
     }
 
     void draw_game(int ww, int wh) {
-        game_renderer_.render_screen(*game_, frame_);
+        game_renderer_.render_screen(*game_, frame_, render_opt_);
         if (!play_tex_) {
             play_tex_.reset(SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, frame_.width, frame_.height));
             SDL_SetTextureScaleMode(play_tex_.get(), SDL_SCALEMODE_NEAREST);
@@ -361,6 +361,7 @@ private:
     std::string play_error_;
 public:
     std::uint16_t scripted_input_ = 0;  // for --hold in screenshot runs
+    bt::RenderOptions render_opt_;
     struct InputRange { int from, to; std::uint16_t bits; };
     std::vector<InputRange> input_script_;  // --input from-to:bits,...
 private:
@@ -388,6 +389,7 @@ int main(int argc, char** argv) {
     int start_ticks = 0;
     std::uint16_t hold_bits = 0;
     std::string input_spec;
+    bool no_text = false, no_sprites = false;
     float start_x = 0, start_y = 0;
     int start_zoom = 3;
     for (int i = 1; i < argc; ++i) {
@@ -398,6 +400,8 @@ int main(int argc, char** argv) {
         else if (a == "--collision") start_collision = true;
         else if (a == "--play") start_play = true;
         else if (a == "--boot") start_boot = true;
+        else if (a == "--no-text") no_text = true;
+        else if (a == "--no-sprites") no_sprites = true;
         else if (a == "--ticks" && i + 1 < argc) start_ticks = std::atoi(argv[++i]);
         else if (a == "--input" && i + 1 < argc) input_spec = argv[++i];
         else if (a == "--hold" && i + 1 < argc) hold_bits = static_cast<std::uint16_t>(std::strtol(argv[++i], nullptr, 16));
@@ -430,6 +434,8 @@ int main(int argc, char** argv) {
         viewer.open(start_level, start_sprites, start_bank, start_collision, start_objects, start_x, start_y, start_zoom);
         if (start_play || start_boot) {
             viewer.scripted_input_ = hold_bits;
+            viewer.render_opt_.text = !no_text;
+            viewer.render_opt_.sprites = !no_sprites;
             for (std::size_t pos = 0; pos < input_spec.size();) {
                 const std::size_t end = std::min(input_spec.find(',', pos), input_spec.size());
                 // "from-to:hexbits"

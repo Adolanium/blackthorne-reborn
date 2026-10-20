@@ -45,7 +45,10 @@ public:
     void render_screen(const Game& game, Image& out, const RenderOptions& opt = {}) const;
 
 private:
-    void draw_layer(const Game& game, std::uint16_t layer_offset, Image& out) const;
+    // A map layer: cells at `layer_offset` in the map segment, `row_bytes` per row,
+    // `width` x `height` cells, viewed from (cam_x, cam_y).
+    void draw_layer(const Game& game, std::uint16_t layer_offset, int row_bytes, int width, int height, int cam_x, int cam_y,
+                    Image& out) const;
     void draw_parts(const Game& game, Image& out) const;
     void draw_text(const Game& game, Image& out) const;
 

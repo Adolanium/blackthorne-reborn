@@ -136,19 +136,22 @@ void Renderer::draw_hud(const Game& game, Image& out) const {
 
 void Renderer::render(const Game& game, Image& out, const RenderOptions& opt) const {
     out.resize(kWidth, kHeight);
-    if (opt.background && game.has_background()) draw_layer(game, game.background_offset(), out);
-    if (opt.foreground) draw_layer(game, game.foreground_offset(), out);
+    const DataSegment& ds = game.machine().ds;
+    auto s16 = [&](std::uint16_t a) { return static_cast<int>(static_cast<std::int16_t>(ds.u16(a))); };
+    if (opt.background && game.has_background())
+        draw_layer(game, game.background_offset(), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17), s16(0x1B52), s16(0x1B54), out);
+    if (opt.foreground)
+        draw_layer(game, game.foreground_offset(), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth),
+                   ds.u16(Machine::kMapHeight), s16(0x1B4E), s16(0x1B50), out);
     if (opt.sprites) draw_parts(game, out);
     if (opt.text) draw_text(game, out);
 }
 
 // One map layer (cells: bits 0-9 metatile) over the camera window.
-void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, Image& out) const {
+void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, int row_bytes, int map_w, int map_h, int cam_x,
+                          int cam_y, Image& out) const {
     const Machine& m = game.machine();
     const DataSegment& ds = m.ds;
-    const int cam_x = static_cast<std::int16_t>(ds.u16(0x1B4E)), cam_y = static_cast<std::int16_t>(ds.u16(0x1B50));
-    const int map_w = ds.u16(Machine::kMapWidth), map_h = ds.u16(Machine::kMapHeight);
-    const std::uint16_t row_bytes = ds.u16(Machine::kMapRowBytes);
     const std::uint16_t metatiles = ds.u16(Machine::kMetatileTable);
     for (int my = cam_y >> 4; my <= (cam_y + kHeight) >> 4; ++my) {
         for (int mx = cam_x >> 4; mx <= (cam_x + kWidth) >> 4; ++mx) {

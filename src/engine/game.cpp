@@ -278,6 +278,12 @@ void Game::set_camera_bounds() {
     ds.set_u16(0x1C8E, static_cast<std::uint16_t>(std::max(0, w * 16 - 0x100)));
     ds.set_u16(0x1C94, static_cast<std::uint16_t>(h * 2));
     ds.set_u16(0x1C90, static_cast<std::uint16_t>(std::max(0, h * 16 - 0xE0)));
+    const int bw = ds.u16(kDescriptor + 0x27), bh = ds.u16(kDescriptor + 0x29);
+    ds.set_u16(0x1CA0, static_cast<std::uint16_t>(bw * 2));
+    ds.set_u16(0x1C9C, static_cast<std::uint16_t>(bw * 2));
+    ds.set_u16(0x1C98, static_cast<std::uint16_t>(std::max(0, bw * 16 - 0x100)));
+    ds.set_u16(0x1C9E, static_cast<std::uint16_t>(bh * 2));
+    ds.set_u16(0x1C9A, static_cast<std::uint16_t>(std::max(0, bh * 16 - 0xE0)));
 }
 
 // sub_10991: the camera shows the 256x224 screen containing Kyle.
@@ -290,6 +296,16 @@ void Game::place_camera() {
     };
     ds.set_u16(0x1B4E, static_cast<std::uint16_t>(snap(static_cast<std::int16_t>(ds.field(field::kX, 0)), ds.u16(0x1C8E), 0x100)));
     ds.set_u16(0x1B50, static_cast<std::uint16_t>(snap(static_cast<std::int16_t>(ds.field(field::kY, 0)), ds.u16(0x1C90), 0xE0)));
+    // Background camera: the foreground camera times the 8.8 parallax factors
+    // in header words 0x32 / 0x34 (integer part 1B52h/1B54h, fraction 1B56h/1B58h).
+    const std::uint32_t bx = static_cast<std::uint32_t>(ds.u16(kDescriptor + 0x32)) * ds.u16(0x1B4E);
+    const std::uint32_t by = static_cast<std::uint32_t>(ds.u16(kDescriptor + 0x34)) * ds.u16(0x1B50);
+    ds.set_u16(0x1B52, static_cast<std::uint16_t>(bx >> 8));
+    ds.set_u16(0x1B56, static_cast<std::uint16_t>(bx & 0xFF));
+    ds.set_u16(0x1B54, static_cast<std::uint16_t>(by >> 8));
+    ds.set_u16(0x1B58, static_cast<std::uint16_t>(by & 0xFF));
+    // Level 0x9C (the title text) keeps one screen per language in its background.
+    if (ds.u16(0x1CA4) == 0x9C) ds.set_u16(0x1B54, static_cast<std::uint16_t>(0xE0 * ds.u16(0x6A)));
 }
 
 // sub_100B6's test: has Kyle left the screen the camera shows?
