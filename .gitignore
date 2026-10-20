@@ -6,3 +6,4 @@ out/
 # Local reverse-engineering workspace (game binary, disassembly, dumps): never commit
 re/
 build-asan/
+build-rel/

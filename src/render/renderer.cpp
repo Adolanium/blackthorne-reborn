@@ -72,17 +72,25 @@ void Renderer::render_screen(const Scene& scene, Image& out, const RenderOptions
     const int shake_x = static_cast<std::int16_t>(ds.u16(0x344)), shake_y = static_cast<std::int16_t>(ds.u16(0x346));
     // Without the HUD the original centres the playfield horizontally but
     // keeps it at the top (the bottom 16 lines stay black).
-    const int ox = (hud ? 0 : (screen_w - play.width) / 2) - shake_x, oy = -shake_y;
-    for (int y = 0; y < kHeight; ++y) {
-        const int sy = y + oy;
-        if (sy < 0 || sy >= kScreenHeight) continue;
-        for (int x = 0; x < play.width; ++x) {
-            const int sx = x + ox;
-            if (sx >= 0 && sx < screen_w)
-                out.pixels[static_cast<std::size_t>(sy) * screen_w + sx] = play.pixels[static_cast<std::size_t>(y) * play.width + x];
+    // The page: playfield and HUD as drawn, before the shake.
+    Image page;
+    page.resize(screen_w, kScreenHeight);
+    const int px = hud ? 0 : (screen_w - play.width) / 2;
+    for (int y = 0; y < kHeight; ++y)
+        std::copy_n(play.pixels.begin() + static_cast<std::ptrdiff_t>(y * play.width), play.width,
+                    page.pixels.begin() + static_cast<std::ptrdiff_t>(y * screen_w + px));
+    if (hud) draw_hud(scene, page);
+    // The shake moves the CRTC start address, so the whole screen moves,
+    // HUD included.
+    for (int y = 0; y < kScreenHeight; ++y) {
+        const int sy = y + shake_y;
+        for (int x = 0; x < screen_w; ++x) {
+            const int sx = x + shake_x;
+            out.pixels[static_cast<std::size_t>(y) * screen_w + x] =
+                (sx >= 0 && sx < screen_w && sy >= 0 && sy < kScreenHeight) ? page.pixels[static_cast<std::size_t>(sy) * screen_w + sx]
+                                                                           : 0xFF000000u;
         }
     }
-    if (hud) draw_hud(scene, out);
 }
 
 // A HUD stamp, drawn like a sprite part (sub_157F0): pixels below 16 take the

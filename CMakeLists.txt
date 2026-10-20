@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
 project(blackthorne_reborn LANGUAGES CXX C)
 
+# Link the C/C++ runtime statically on MSVC so the game runs without the
+# Visual C++ redistributable.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
