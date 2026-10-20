@@ -40,6 +40,12 @@ int main(int argc, char** argv) {
             // Save-state round trip: a fresh game loaded from the save must
             // stay in lockstep with this one.
             const auto save = std::filesystem::temp_directory_path() / "btsoak.bts";
+            for (int k = 0; !game.can_save(); ++k, ++t) {  // not in the middle of a fade, flip or menu
+                if (k > 200) throw std::runtime_error("never reached a frame where saving is possible");
+                game.set_input(0);
+                game.tick();
+                game.vm().events().clear();
+            }
             game.save_state(save);
             bt::Game copy(archive, data.parent_path() / "BTHORNE.EXE");
             copy.load_state(save);

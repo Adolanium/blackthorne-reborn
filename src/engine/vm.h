@@ -94,7 +94,7 @@ public:
     void apply_password() { op_apply_password(); }               // sub_10B92
     void retint_range(std::uint16_t start, int colours) { retint_palette(start, colours); }  // sub_12671
     bool alloc_frame_buffer(std::uint16_t bank, std::uint16_t& seg, std::uint16_t& off);  // sub_11F9E
-    void run_scheduler();                                        // sub_1601A + sub_15FCE
+    void run_scheduler(bool offscreen_only = false);             // sub_1601A (or sub_15FF1) + sub_15FCE
     void integrate_velocity();                                   // sub_111BC
     void run_check_pass(int pass);                               // sub_17AC7 (+1), sub_17AB2 (-1)
     void apply_anchors();                                        // sub_11260

@@ -1,7 +1,10 @@
 #pragma once
 
+#include <exception>
 #include <filesystem>
 #include <memory>
+#include <semaphore>
+#include <thread>
 
 #include "data/archive.h"
 #include "data/level.h"
@@ -15,6 +18,9 @@ namespace bt {
 class Game {
 public:
     Game(const Archive& archive, const std::filesystem::path& exe_path, int language = 0);
+    ~Game();
+    Game(const Game&) = delete;
+    Game& operator=(const Game&) = delete;
 
     // Starts the game the way the original does after its hardware setup
     // (sub_10E05, sub_128E9): password "STRT", then level 0x61 (the opening).
@@ -34,11 +40,16 @@ public:
     };
     void set_input(std::uint16_t bits) { machine_->ds.set_u16(0x2A82, bits); }
 
-    // One game tick (30 per second).
+    // One frame: runs the original's control flow from one frame wait
+    // (sub_10113 with the page-flip counter ds:5312h above zero) to the next.
+    // Usually that is one main loop iteration; a screen flip, a level change,
+    // a fade or a menu step spreads its work over frames the same way.
     void tick();
 
     // Save states: the whole machine memory plus the level id. Banks and the
-    // static level data are reloaded from DATA.DAT. Throws on I/O errors.
+    // static level data are reloaded from DATA.DAT. Saving is possible at a
+    // plain main-loop frame (can_save()); throws otherwise or on I/O errors.
+    bool can_save() const { return saveable_; }
     void save_state(const std::filesystem::path& path) const;
     void load_state(const std::filesystem::path& path);
 
@@ -63,18 +74,45 @@ private:
     void place_camera();           // sub_10991: flip-screen camera on Kyle
     bool camera_needs_flip() const;  // sub_100B6 test
     void spawn_start_records();    // sub_11442
-    void main_loop_actors();       // the actor part of sub_10043
+    void load_level_data(int level_id, int x, int y);  // sub_105B4
+
+    // The original control flow, run on a worker that pauses at frame waits.
+    void run_logic();
+    void wait_frame();             // sub_10113: a frame boundary when ds:5312h > 0
+    void frame();                  // sub_1008C: wait, then the per-frame effects
+    void frame_tail();             // sub_1008C after the wait
+    void iteration();              // sub_10043, falling into sub_1008C
+    void latch_input();            // sub_10A87
+    void level_frames();           // sub_1011B: level change / pause loop
     void change_level();           // sub_1011B, level-exit branch
+    void flip_screen();            // sub_100B6, loc_100F5
+    void blink_parts();            // sub_10179
+    void fade(bool in);            // sub_1270D (in) / sub_12752 (out)
+    void retint();                 // sub_1266C
+    void page_flip();              // sub_1283B, the frame counter part
+    void track_redraws();          // sub_158FA bookkeeping
+    void stop_worker();
+    struct Stop {};
+    enum class Entry { AfterLoad, AfterWait, Loop };
+    Entry entry_ = Entry::AfterLoad;
+    std::thread worker_;
+    std::binary_semaphore go_{0}, done_{0};
+    bool stopping_ = false;
+    bool saveable_ = false;
+    int nesting_ = 0;              // > 0 inside flips, fades, menus and level changes
+    std::exception_ptr error_;
+
     void music_action();           // sub_11C64: the header's music action
     void hud_init();               // sub_140DC + sub_1407B
     void hud_tick();               // sub_1411C (inventory cycling) + sub_14164 (health, inventory state)
     void cycle_palettes();         // sub_186C4
     void update_shake();           // sub_10AC1
     void animate_tiles();          // sub_18822
-    void frame_effects();          // the per-frame half of sub_1008C
     // The modal yes/no menus (loc_12A12 pause, sub_1290E escape).
+    void menu(bool quit_menu);
     void open_menu(bool quit_menu);
-    void menu_step();              // sub_12AF5 and the loop exit
+    void menu_select();            // sub_12AF5
+    void menu_finish();            // the loop exit
     struct Menu {
         bool active = false;
         bool quit_menu = false;

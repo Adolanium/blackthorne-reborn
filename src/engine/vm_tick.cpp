@@ -50,8 +50,9 @@ void Vm::schedule_actor(int s) {
 }
 
 // sub_1601A + sub_15FCE: run every actor once; actors spawned behind the
-// scheduler during this tick run right after their spawner.
-void Vm::run_scheduler() {
+// scheduler during this tick run right after their spawner. sub_15FF1 (after
+// a screen flip) does the same for the actors marked offscreen only.
+void Vm::run_scheduler(bool offscreen_only) {
     for (int s = ds_.s16(ds_addr::kActorEnd) - 2; s >= 0; s -= 2) {  // sub_1763F
         ds_.set_field(f::kMoveX, s, 0);
         ds_.set_field(f::kMoveY, s, 0);
@@ -60,7 +61,11 @@ void Vm::run_scheduler() {
     ds_.set_u16(g::kQueueLen, 0);
     ds_.set_u16(g::kPass, 0);
     for (int s = 0; s < ds_.s16(ds_addr::kActorEnd); s += 2) {
-        ds_.set_u16(g::kSchedSlot, static_cast<std::uint16_t>(s));
+        if (offscreen_only) {
+            if (!(ds_.field(field::kFlags, s) & 0x200)) continue;
+        } else {
+            ds_.set_u16(g::kSchedSlot, static_cast<std::uint16_t>(s));
+        }
         schedule_actor(s);
         const int queued = ds_.u16(g::kQueueLen);
         if (queued) {
@@ -111,7 +116,7 @@ void Vm::run_check_pass(int pass) {
         }
         run_checks(s);
     }
-    ds_.set_u16(g::kPass, 0);
+    // The pass number stays set (sub_17AB2 leaves -1); the scheduler clears it.
 }
 
 // sub_11260: anchored moves (follow slot 134Ah) and one-shot moves (>= 0x100).

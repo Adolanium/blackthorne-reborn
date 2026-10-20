@@ -33,6 +33,20 @@ Game::Game(const Archive& archive, const std::filesystem::path& exe_path, int la
     vm_ = std::make_unique<Vm>(*machine_);
 }
 
+Game::~Game() { stop_worker(); }
+
+// Ends the worker (it unwinds from its frame wait) so the state can be
+// replaced or the game destroyed.
+void Game::stop_worker() {
+    if (!worker_.joinable()) return;
+    stopping_ = true;
+    go_.release();
+    worker_.join();
+    stopping_ = false;
+    saveable_ = false;
+    nesting_ = 0;
+}
+
 namespace {
 constexpr char kSaveMagic[8] = {'B', 'T', 'R', 'S', 'A', 'V', 'E', '1'};
 }
@@ -43,7 +57,8 @@ void Game::save_state(const std::filesystem::path& path) const {
     const Machine& m = *machine_;
     auto put = [&](const void* p, std::size_t n) { out.write(static_cast<const char*>(p), static_cast<std::streamsize>(n)); };
     put(kSaveMagic, sizeof kSaveMagic);
-    const std::int32_t header[3] = {level_id_, has_background_ ? 1 : 0, menu_.active ? (menu_.quit_menu ? 2 : 1) | (menu_.darkened ? 4 : 0) : 0};
+    if (!saveable_ && worker_.joinable()) throw std::runtime_error("can't save in the middle of a transition");
+    const std::int32_t header[3] = {level_id_, has_background_ ? 1 : 0, 0};
     put(header, sizeof header);
     put(m.ds.raw(), DataSegment::kSize);
     put(m.map.data(), m.map.size());
@@ -56,6 +71,7 @@ void Game::save_state(const std::filesystem::path& path) const {
 }
 
 void Game::load_state(const std::filesystem::path& path) {
+    stop_worker();
     std::ifstream in(path, std::ios::binary);
     if (!in) throw std::runtime_error("no save at " + path.string());
     char magic[sizeof kSaveMagic];
@@ -84,7 +100,8 @@ void Game::load_state(const std::filesystem::path& path) {
     }
     level_id_ = header[0];
     has_background_ = header[1] != 0;
-    menu_ = {header[2] != 0, (header[2] & 3) == 2, (header[2] & 4) != 0};
+    menu_ = {};
+    entry_ = Entry::AfterWait;  // saves are made at the frame wait of a plain main loop pass
     level_ = bt::load_level(archive_, level_id_ - 1);
     *machine_ = std::move(*machine);
 }
@@ -113,13 +130,26 @@ void Game::boot() {
     ds.set_u16(0x380, 1);
     const char start[4] = {'S', 'T', 'R', 'T'};
     for (int k = 0; k < 4; ++k) ds.set_u16(static_cast<std::uint16_t>(0x372 + 2 * k), static_cast<std::uint8_t>(start[k]));
-    // sub_128E9: Kyle's starting flags and the first level.
+    // loc_190B4: the frame rate divisor (2: 30 frames a second).
+    ds.set_u16(0x66, 0);
+    ds.set_u16(0x68, 2);
+    // sub_128E9: Kyle's starting flags and the first level, loaded from the
+    // "next level" variables like every level change.
     ds.set_field(0x1552, 0, 0);
     ds.set_field(field::kFlags, 0, 0x27);
+    ds.set_u16(0x1CA8, 0x61);
+    ds.set_u16(0x1CAA, 0x80);
+    ds.set_u16(0x1CAC, 0x70);
     load_level(0x61, 0x80, 0x70);
 }
 
 void Game::load_level(int level_id, int x, int y) {
+    stop_worker();
+    load_level_data(level_id, x, y);
+    entry_ = Entry::AfterLoad;
+}
+
+void Game::load_level_data(int level_id, int x, int y) {
     DataSegment& ds = machine_->ds;
     // sub_10A15 spawns Kyle with the parameter and low flag byte he had before.
     const std::uint16_t kyle_param = ds.field(0x1552, 0);
@@ -185,8 +215,8 @@ void Game::load_level(int level_id, int x, int y) {
     // loc_15C36 (with the font load): the text layer starts empty.
     for (int i = 0; i < 0x380; ++i) ds.set_u16(static_cast<std::uint16_t>(0x2D08 + 2 * i), 0x20);
 
-    // The shown palette starts as the untinted base palette.
-    for (int i = 0; i < 768; ++i) ds.set_u8(static_cast<std::uint16_t>(kShownPalette + i), ds.u8(static_cast<std::uint16_t>(kBasePalette + i)));
+    // The shown palette is left alone: it is still black from the fade out
+    // (or from start-up) until the fade in after the first two passes.
 
     // sub_10A15: Kyle is actor type 0 in slot 0.
     ds.set_u16(0x31E, 0);
@@ -194,16 +224,24 @@ void Game::load_level(int level_id, int x, int y) {
     ds.set_u16(0x28, static_cast<std::uint16_t>(y));
     ds.set_u16(0x32E, kyle_param);
     ds.set_u16(ds_addr::kCurrentSlot, 0xFFFF);
-    ds.set_u16(0x364, 0xFFFF);
+    // ds:364h/366h (the hot spot) keep what the last spawn left: sub_10A15
+    // does not set them, so Kyle's half size can be 0 (as in the intro).
     if (vm_->spawn_actor(0, 0xFFFF, kyle_flags) != 0) throw std::runtime_error("could not spawn Kyle");
     ds.set_u16(0x31E, 2);
 
     set_camera_bounds();
     place_camera();
+    page_flip();  // sub_10A0C draws the first screen and flips to it
     hud_init();
     music_action();
     spawn_start_records();
     vm_->spawn_visible_records();
+    for (int k = 0; k < 2; ++k) {  // sub_10A93 twice: nothing counts as newly pressed
+        const std::uint16_t now = ds.u16(0x35A);
+        ds.set_u16(0x35C, static_cast<std::uint16_t>((now ^ ds.u16(0x360)) & now));
+        ds.set_u16(0x35E, static_cast<std::uint16_t>(ds.u16(0x35E) | ds.u16(0x35C)));
+        ds.set_u16(0x360, now);
+    }
 }
 
 // sub_11C64: header byte 4 picks what happens to the music; byte 5 is the song.
@@ -490,18 +528,110 @@ void Game::hud_tick() {
     }
 }
 
-void Game::main_loop_actors() {
-    vm_->run_scheduler();
-    vm_->integrate_velocity();
-    vm_->run_check_pass(+1);
-    vm_->apply_anchors();
-    vm_->run_check_pass(-1);
-    vm_->move_parts();
-    vm_->mark_offscreen_actors();
+void Game::tick() {
+    if (!worker_.joinable()) worker_ = std::thread([this] { run_logic(); });
+    else go_.release();
+    done_.acquire();
+    if (error_) {
+        std::exception_ptr e = error_;
+        error_ = nullptr;
+        if (worker_.joinable()) worker_.join();
+        std::rethrow_exception(e);
+    }
 }
 
-void Game::tick() {
-    // sub_10A80 / sub_10A93: latch the input word, newly pressed bits, accumulated presses.
+// The worker: what the original does after loading a level (start and
+// loc_1013A: two main loop iterations, then the fade in), then the main loop.
+void Game::run_logic() {
+    try {
+        if (entry_ == Entry::AfterLoad) {
+            ++nesting_;
+            iteration();
+            iteration();
+            fade(true);
+            --nesting_;
+        }
+        if (entry_ == Entry::AfterWait) {  // a save resumes behind the frame wait it was made at
+            machine_->ds.set_u16(0x5312, 0);
+            frame_tail();
+        }
+        entry_ = Entry::Loop;
+        for (;;) iteration();
+    } catch (const Stop&) {
+    } catch (...) {
+        error_ = std::current_exception();
+        done_.release();
+    }
+}
+
+void Game::wait_frame() {
+    DataSegment& ds = machine_->ds;
+    if (ds.s16(0x5312) <= 0) return;  // the retrace already came: no wait
+    saveable_ = nesting_ == 0;
+    done_.release();
+    go_.acquire();
+    if (stopping_) throw Stop{};
+    ds.set_u16(0x5312, 0);
+}
+
+// sub_1008C: the frame wait, then the per-frame work.
+void Game::frame() {
+    wait_frame();
+    frame_tail();
+}
+
+// The rest of sub_1008C after the wait.
+void Game::frame_tail() {
+    DataSegment& ds = machine_->ds;
+    if (ds.u8(0x5315) && ds.u16(0x4A10)) ds.set_u16(0x4A10, 0);  // sub_128A1 uploads the palette
+    cycle_palettes();
+    update_shake();
+    animate_tiles();
+    track_redraws();
+    page_flip();
+}
+
+// sub_158FA (from sub_15BA0): the part drawer's bookkeeping for the page it
+// draws. E52h counts pages still to draw a part on (low byte) and to erase
+// its old image from (high byte); A52h/C52h are where it was last drawn and
+// B52h/D52h where it was the page before. ds:60C6h > 0 redraws every part
+// (a screen flip sets it to 3). Freed parts keep their slot until erased.
+void Game::track_redraws() {
+    DataSegment& ds = machine_->ds;
+    const bool all = ds.u8(0x60C6) != 0;
+    for (int p = 0xFE; p >= 0; p -= 2) {
+        const auto at = [&](std::uint16_t base) { return static_cast<std::uint16_t>(base + p); };
+        if (ds.u8(at(0xE53))) {
+            ds.set_u8(at(0xE53), static_cast<std::uint8_t>(ds.u8(at(0xE53)) - 1));
+            ds.set_u16(at(0xB52), ds.u16(at(0xA52)));
+            ds.set_u16(at(0xD52), ds.u16(at(0xC52)));
+        }
+        if (!(ds.u16(at(0x452)) & 0x80)) continue;
+        if (!all) {
+            if (!ds.u8(at(0xE52))) continue;
+            ds.set_u8(at(0xE52), static_cast<std::uint8_t>(ds.u8(at(0xE52)) - 1));
+        }
+        ds.set_u16(at(0xA52), ds.u16(at(0x552)));
+        ds.set_u16(at(0xC52), ds.u16(at(0x652)));
+    }
+    // sub_15BA0 only counts the flag down when it is already 0, so after the
+    // first frame it stays non-zero and every part is redrawn every frame.
+    if (!all) ds.set_u8(0x60C6, 0xFF);
+}
+
+// sub_1283B: swap the pages and count the vertical retraces to wait for.
+void Game::page_flip() {
+    DataSegment& ds = machine_->ds;
+    ds.set_u16(0x4A0C, ds.u16(0x4A0C) ^ 2);
+    const std::uint16_t a = ds.u16(0x4A08);
+    ds.set_u16(0x4A08, ds.u16(0x4A0A));
+    ds.set_u16(0x4A0A, a);
+    const int wait = ds.s16(0x5312) + ds.s16(0x68);
+    ds.set_u16(0x5312, static_cast<std::uint16_t>(wait > 0 ? wait : 1));
+}
+
+// sub_10A80 / sub_10A93: latch the input word, newly pressed bits, accumulated presses.
+void Game::latch_input() {
     DataSegment& d = machine_->ds;
     const std::uint16_t now = d.u16(0x2A82);
     d.set_u16(0x35A, now);
@@ -509,20 +639,19 @@ void Game::tick() {
     d.set_u16(0x35C, pressed);
     d.set_u16(0x35E, static_cast<std::uint16_t>(d.u16(0x35E) | pressed));
     d.set_u16(0x360, now);
-    if (menu_.active) {
-        menu_step();
-        frame_effects();
-        return;
-    }
+}
+
+// sub_10043: one pass of the main loop; it falls through into sub_1008C.
+void Game::iteration() {
+    DataSegment& d = machine_->ds;
+    d.set_u16(0x31A, static_cast<std::uint16_t>(d.u16(0x31A) + 1));
+    latch_input();
     // loc_12A12: P opens the "give up?" menu.
-    if (!(d.u16(0x1CF6) & 0x20) && !(d.u16(0x318) & 3) && (pressed & 0x4000)) {
-        open_menu(false);
-        frame_effects();
-        return;
-    }
-    main_loop_actors();
+    if (!(d.u16(0x1CF6) & 0x20) && !(d.u16(0x318) & 3) && (d.u16(0x35C) & 0x4000)) menu(false);
+    level_frames();  // sub_1011B
+    vm_->run_scheduler();  // sub_1601A
     // sub_1290E: Esc opens "quit to main menu?" (or leaves special scenes).
-    if ((pressed & 2) && !(d.u16(0x318) & 3)) {
+    if ((d.u16(0x35C) & 2) && !(d.u16(0x318) & 3)) {
         if (d.u16(0x1CF6) & 0x20) {
             if (d.u16(0x1CA4) != 0x6E) {
                 d.set_u16(0x20A, 1);
@@ -530,31 +659,96 @@ void Game::tick() {
                 d.set_u16(0x318, d.u16(0x318) | 1);
             }
         } else {
-            open_menu(true);
-            frame_effects();
-            return;
+            menu(true);
         }
     }
-    if (camera_needs_flip()) {  // sub_100B6
-        place_camera();
-        vm_->mark_offscreen_actors();
-        // sub_15FF1: run actors that just left the view (they usually despawn).
-        DataSegment& ds = machine_->ds;
-        for (int s = 0; s < ds.s16(ds_addr::kActorEnd); s += 2)
-            if (ds.field(field::kFlags, s) & 0x200) vm_->schedule_actor(s);
-        vm_->spawn_visible_records();
-        main_loop_actors();
-    }
-    hud_tick();  // sub_1411C, sub_14164 close the main loop
-    frame_effects();
-    if (machine_->ds.u16(0x318) & 1) change_level();
+    blink_parts();  // sub_10179
+    vm_->integrate_velocity();
+    vm_->run_check_pass(+1);
+    vm_->apply_anchors();
+    vm_->run_check_pass(-1);
+    vm_->move_parts();
+    vm_->mark_offscreen_actors();
+    if (camera_needs_flip()) flip_screen();  // sub_100B6
+    hud_tick();  // sub_1411C, sub_14164
+    d.set_u16(0x31A, static_cast<std::uint16_t>(d.u16(0x31A) + 1));
+    frame();
 }
 
-// The main loop falls through into the frame routine sub_1008C.
-void Game::frame_effects() {
-    cycle_palettes();
-    update_shake();
-    animate_tiles();
+// sub_100B6 (loc_100F5): Kyle left the screen. The new screen is set up and
+// a whole nested main loop pass runs before this one finishes.
+void Game::flip_screen() {
+    ++nesting_;
+    place_camera();
+    vm_->mark_offscreen_actors();
+    vm_->run_scheduler(true);  // sub_15FF1: actors that just left the view (they usually despawn)
+    DataSegment& ds = machine_->ds;
+    vm_->spawn_visible_records();
+    ds.set_u8(0x60C6, 3);  // byte_15FC6: redraw everything on the next pages
+    iteration();
+    --nesting_;
+}
+
+// sub_10179: while ds:258h counts down, the parts from ds:198Ah (ds:19B2h of
+// them) blink every other two frames.
+void Game::blink_parts() {
+    DataSegment& ds = machine_->ds;
+    const int t = ds.s16(0x258) - 1;
+    ds.set_u16(0x258, static_cast<std::uint16_t>(t));
+    if (t < 0) {
+        ds.set_u16(0x258, 0);
+        return;
+    }
+    const bool hide = t & 2;
+    std::uint16_t si = ds.u16(0x198A);
+    for (int n = ds.u16(0x19B2); n > 0; --n, si = static_cast<std::uint16_t>(si + 2)) {
+        const std::uint16_t a = static_cast<std::uint16_t>(si + 0x452);
+        ds.set_u16(a, hide ? static_cast<std::uint16_t>(ds.u16(a) | 0x40) : static_cast<std::uint16_t>(ds.u16(a) & ~0x40));
+        ds.set_u16(static_cast<std::uint16_t>(si + 0xE52), hide ? 0x200 : 0x202);
+    }
+}
+
+// sub_1011B: ds:318h bit 0 changes level, bit 2 pauses until a key, bit 1 is
+// cleared.
+void Game::level_frames() {
+    DataSegment& ds = machine_->ds;
+    const std::uint16_t f = ds.u16(0x318);
+    if (f & 1) {
+        change_level();
+    } else if (f & 4) {
+        ds.set_u16(0x318, static_cast<std::uint16_t>(f & ~4));
+        ++nesting_;
+        do {
+            frame();
+            latch_input();
+        } while (!(ds.u16(0x35C) & 0xCFC3));
+        ds.set_u16(0x35E, 0);
+        --nesting_;
+    } else if (f & 2) {
+        ds.set_u16(0x318, static_cast<std::uint16_t>(f & ~2));
+    }
+}
+
+// sub_1266C: the shown palette is the base palette plus the tint (ds:320h-324h).
+void Game::retint() { vm_->retint_range(0, 256); }
+
+// sub_1270D / sub_12752: two frames of fading, through tint 46h.
+void Game::fade(bool in) {
+    DataSegment& ds = machine_->ds;
+    ++nesting_;
+    if (!in) ds.set_u16(0x326, 0xFFFF);
+    for (int bx : in ? std::initializer_list<int>{0x46, 0} : std::initializer_list<int>{0, 0x46}) {
+        for (int k = 0; k < 3; ++k) ds.set_u16(static_cast<std::uint16_t>(0x320 + 2 * k), static_cast<std::uint16_t>(bx));
+        retint();
+        ds.set_u16(0x4A10, 2);
+        ds.set_u8(0x5315, 1);
+        page_flip();
+        wait_frame();
+        if (ds.u8(0x5315) && ds.u16(0x4A10)) ds.set_u16(0x4A10, 0);
+    }
+    for (int k = 0; k < 3; ++k) ds.set_u16(static_cast<std::uint16_t>(0x320 + 2 * k), 0);
+    if (!in) ds.set_u8(0x5315, 0);
+    --nesting_;
 }
 
 // loc_1296F / loc_12A4C: darken the palette (unless a tint is active), show
@@ -581,30 +775,49 @@ void Game::open_menu(bool quit_menu) {
 
 // sub_12AF5: Left / Right pick an answer, the choice blinks every 12 frames;
 // Enter, Esc or Fire closes the menu.
-void Game::menu_step() {
+// The menu loop: a frame per step until Enter, Esc or Fire.
+void Game::menu(bool quit_menu) {
+    DataSegment& ds = machine_->ds;
+    ++nesting_;
+    open_menu(quit_menu);
+    frame();
+    do {
+        menu_select();
+        frame();
+        latch_input();
+    } while (!(ds.u16(0x35C) & 0x43));
+    vm_->clear_text();
+    frame();
+    menu_finish();
+    --nesting_;
+}
+
+void Game::menu_finish() {
     DataSegment& ds = machine_->ds;
     const std::uint16_t pressed = ds.u16(0x35C);
-    if (pressed & 0x43) {
-        vm_->clear_text();
-        const bool yes = !(pressed & 2) && ds.u16(0x5C) == 0x578A;
-        if (yes && menu_.quit_menu) {
-            ds.set_u16(0x20A, 1);
-            ds.set_u16(0x1CA8, 0x6E);
-            ds.set_u16(0x318, ds.u16(0x318) | 1);
-        } else if (yes) {
-            vm_->apply_password();
-            ds.set_u16(0x318, ds.u16(0x318) | 1);
-            ds.set_u16(0x1CF6, ds.u16(0x1CF6) | 0x10);
-        }
-        if (menu_.darkened) {  // sub_16355
-            for (int k = 0; k < 3; ++k) ds.set_u16(static_cast<std::uint16_t>(0x320 + 2 * k), 0);
-            vm_->retint_range(0, 256);
-        }
-        ds.set_u16(0x360, ds.u16(0x35A));  // sub_10A93
-        ds.set_u16(0x35E, 0);
-        menu_.active = false;
-        return;
+    const bool yes = !(pressed & 2) && ds.u16(0x5C) == 0x578A;
+    if (yes && menu_.quit_menu) {
+        ds.set_u16(0x20A, 1);
+        ds.set_u16(0x1CA8, 0x6E);
+        ds.set_u16(0x318, ds.u16(0x318) | 1);
+    } else if (yes) {
+        vm_->apply_password();
+        ds.set_u16(0x318, ds.u16(0x318) | 1);
+        ds.set_u16(0x1CF6, ds.u16(0x1CF6) | 0x10);
     }
+    if (menu_.darkened) {  // sub_16355
+        for (int k = 0; k < 3; ++k) ds.set_u16(static_cast<std::uint16_t>(0x320 + 2 * k), 0);
+        retint();
+    }
+    ds.set_u16(0x360, ds.u16(0x35A));  // sub_10A93
+    ds.set_u16(0x35E, 0);
+    menu_.active = false;
+}
+
+// sub_12AF5: Left / Right pick an answer, the choice blinks every 12 frames.
+void Game::menu_select() {
+    DataSegment& ds = machine_->ds;
+    const std::uint16_t pressed = ds.u16(0x35C);
     bool redraw = false;
     auto choose = [&](std::uint16_t answer) {
         if (ds.u16(0x5C) == answer) return;
@@ -628,7 +841,6 @@ void Game::menu_step() {
     }
     vm_->show_text_block(ds.u16(0x5E));
 }
-
 // sub_186C4: palette cycles enabled in the mask ds:1B86h. A range rotates one
 // colour per step (direction by its ends); a single colour steps through a
 // list of 5:5:5 values.
@@ -722,14 +934,25 @@ void Game::animate_tiles() {
 
 // sub_1011B: on a level exit every actor's script restarts once (ds:316h),
 // then the level in ds:1CA8h loads with Kyle at (ds:1CAAh, ds:1CACh).
+// sub_1011B, loc_1013A: fade out, load the next level, run two passes and
+// fade in; the interrupted main loop pass then carries on.
 void Game::change_level() {
     DataSegment& ds = machine_->ds;
+    ++nesting_;
     ds.set_u16(0x318, 0);
+    fade(false);
     ds.set_u16(0x316, static_cast<std::uint16_t>(ds.u16(0x316) + 1));
     vm_->run_scheduler();
-    load_level(ds.u16(0x1CA8), static_cast<std::int16_t>(ds.u16(0x1CAA)), static_cast<std::int16_t>(ds.u16(0x1CAC)));
-    main_loop_actors();
-    main_loop_actors();
+    // sub_11D00: music action 2 waits ten frames for the music to fade.
+    if (ds.u8(0x1CF4) == 2)
+        for (int k = 0; k < 10; ++k) {
+            ds.set_u16(0x5312, 1);
+            wait_frame();
+        }
+    load_level_data(ds.u16(0x1CA8), static_cast<std::int16_t>(ds.u16(0x1CAA)), static_cast<std::int16_t>(ds.u16(0x1CAC)));
+    iteration();
+    iteration();
+    fade(true);
+    --nesting_;
 }
-
 }  // namespace bt
