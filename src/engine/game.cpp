@@ -240,23 +240,30 @@ void Game::load_level_data(int level_id, int x, int y) {
     place_camera();
     page_flip();  // sub_10A0C draws the first screen and flips to it
     hud_init();
-    music_action();
+    music_action(ds.u8(0x1CF2));  // sub_11C64: the entry action
     spawn_start_records();
     vm_->spawn_visible_records();
-    for (int k = 0; k < 2; ++k) {  // sub_10A93 twice: nothing counts as newly pressed
-        const std::uint16_t now = ds.u16(0x35A);
-        ds.set_u16(0x35C, static_cast<std::uint16_t>((now ^ ds.u16(0x360)) & now));
-        ds.set_u16(0x35E, static_cast<std::uint16_t>(ds.u16(0x35E) | ds.u16(0x35C)));
-        ds.set_u16(0x360, now);
-    }
+    settle_input();  // sub_10A93 twice: nothing counts as newly pressed
+    settle_input();
 }
 
-// sub_11C64: header byte 4 picks what happens to the music; byte 5 is the song.
-// 0 = play the song (sub_11CC2), 1 = keep, 2 = stop (sub_11CF6), 3 = load only.
-void Game::music_action() {
+// sub_10A93: newly pressed bits from the latched input word (no new read).
+void Game::settle_input() {
+    DataSegment& ds = machine_->ds;
+    const std::uint16_t now = ds.u16(0x35A);
+    ds.set_u16(0x35C, static_cast<std::uint16_t>((now ^ ds.u16(0x360)) & now));
+    ds.set_u16(0x35E, static_cast<std::uint16_t>(ds.u16(0x35E) | ds.u16(0x35C)));
+    ds.set_u16(0x360, now);
+}
+
+// The music actions of the table at ds:295Ah, run with the header's entry
+// action (byte 4, ds:1CF2h) on load and its exit action (ds:1CF4h) when the
+// level ends; byte 5 is the song. 0 = play the song (loc_11CC2), 1 = keep,
+// 2 = stop (loc_11CF6), 3 = load only (sub_11C77).
+void Game::music_action(int action) {
     DataSegment& ds = machine_->ds;
     auto& ev = vm_->events();
-    const int action = ds.u8(0x1CF2), song = ds.u8(0x1CF3);
+    const int song = ds.u8(0x1CF3);
     auto load = [&] {  // sub_11C77
         if (song == ds.u16(0x386)) return;
         ds.set_u16(0x386, static_cast<std::uint16_t>(song));
@@ -266,7 +273,7 @@ void Game::music_action() {
     switch (action) {
         case 0:
             load();
-            if (ds.u16(0x37E) && (song != ds.u16(0x38A) || ds.u16(0x38E) == 0)) {
+            if (ds.u16(0x37E) && (song != ds.u16(0x386) || ds.u16(0x38E) == 0)) {
                 ds.set_u16(0x38A, static_cast<std::uint16_t>(song));
                 ev.push_back({VmEvent::Kind::MusicStart, song});
                 ds.set_u16(0x38E, 1);
@@ -514,9 +521,12 @@ void Game::hud_tick() {
         ds.set_u16(0x1CB0, static_cast<std::uint16_t>(k));
     }
     // sub_14176
-    if (ds.u16(0x1CB0) != ds.u16(0x1CC4)) {
-        ds.set_u16(0x1CC4, ds.u16(0x1CB0));
+    if (ds.u16(0x1CB0) != ds.u16(0x1CC4)) {  // both slots and the name are redrawn
+        const std::uint16_t was = ds.u16(0x1CC4), now = ds.u16(0x1CB0);
+        ds.set_u16(0x1CC4, now);
         ds.set_u16(0x1CC2, ds.u16(0x1CC2) | 3);
+        for (std::uint16_t slot : {now, was})
+            ds.set_u16(static_cast<std::uint16_t>(0x60A6 + slot), ds.u16(static_cast<std::uint16_t>(0x60A6 + slot)) | 3);
     }
     // sub_141DD: health parts at the top right of the playfield, 4 points each.
     const std::uint16_t cx = ds.u16(0x1B4E), cy = ds.u16(0x1B50);
@@ -736,6 +746,7 @@ void Game::level_frames() {
             frame();
             latch_input();
         } while (!(ds.u16(0x35C) & 0xCFC3));
+        settle_input();
         ds.set_u16(0x35E, 0);
         --nesting_;
     } else if (f & 2) {
@@ -781,10 +792,6 @@ void Game::open_menu(bool quit_menu) {
     ds.set_u16(0x1B46, 0);
     ds.set_u16(0x370, 0);
     vm_->show_text_block(0x5780);
-    ds.set_u16(0x5A, 0x5794);
-    ds.set_u16(0x5C, 0x5794);
-    ds.set_u16(0x5E, 0x5780);
-    ds.set_u16(0x60, 0xC);
 }
 
 // sub_12AF5: Left / Right pick an answer, the choice blinks every 12 frames;
@@ -795,6 +802,12 @@ void Game::menu(bool quit_menu) {
     ++nesting_;
     open_menu(quit_menu);
     frame();
+    // The second answer starts selected; the choice blinks every 12 frames.
+    ds.set_u16(0x5A, 0x5794);
+    ds.set_u16(0x5C, 0x5794);
+    ds.set_u16(0x5E, 0x5780);
+    ds.set_u16(0x60, 0xC);
+    ds.set_u16(0x64, 0);
     do {
         menu_select();
         frame();
@@ -823,7 +836,7 @@ void Game::menu_finish() {
         for (int k = 0; k < 3; ++k) ds.set_u16(static_cast<std::uint16_t>(0x320 + 2 * k), 0);
         retint();
     }
-    ds.set_u16(0x360, ds.u16(0x35A));  // sub_10A93
+    settle_input();
     ds.set_u16(0x35E, 0);
     menu_.active = false;
 }
@@ -954,15 +967,23 @@ void Game::change_level() {
     DataSegment& ds = machine_->ds;
     ++nesting_;
     ds.set_u16(0x318, 0);
+    music_action(ds.u8(0x1CF4));  // sub_11C6B: the exit action
     fade(false);
     ds.set_u16(0x316, static_cast<std::uint16_t>(ds.u16(0x316) + 1));
     vm_->run_scheduler();
-    // sub_11D00: music action 2 waits ten frames for the music to fade.
-    if (ds.u8(0x1CF4) == 2)
-        for (int k = 0; k < 10; ++k) {
-            ds.set_u16(0x5312, 1);
-            wait_frame();
-        }
+    // sub_11D00: unless the music is kept, sound effects stop (sub_195C7)
+    // and the music counts as not playing; stopping waits ten frames for
+    // the music to fade.
+    const int exit_action = ds.u8(0x1CF4);
+    if (exit_action != 1) {
+        if (exit_action == 2)
+            for (int k = 0; k < 10; ++k) {
+                ds.set_u16(0x5312, 1);
+                wait_frame();
+            }
+        vm_->events().push_back({VmEvent::Kind::StopAllSounds, 0});
+        ds.set_u16(0x38E, 0);
+    }
     load_level_data(ds.u16(0x1CA8), static_cast<std::int16_t>(ds.u16(0x1CAA)), static_cast<std::int16_t>(ds.u16(0x1CAC)));
     iteration();
     iteration();

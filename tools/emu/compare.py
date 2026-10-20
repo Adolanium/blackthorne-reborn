@@ -13,6 +13,7 @@ K = 0x10000
 # or memory management that our engine does not model.
 IGNORE = [
     (0x2400, 0x2610, 'segments, file and driver state'),
+    (0x292E, 0x2938, 'DATA.DAT header, file handle, saved int 24h vector'),
     (0x2A86, 0x2C08, 'keyboard state table'),
     (0x3508, 0x4308, 'dirty tile maps of the two pages (sub_15A55)'),
     (0x4308, 0x4A08, 'text layer dirty map'),
@@ -42,8 +43,13 @@ def name(addr):
     return 'ds:%04X' % addr
 
 
+# Parts 0 and 1 double as the HUD drawer's stamp (sub_14304): their position
+# and colour are scratch, not game state.
+HUD_STAMP = {base + p for base in (0x552, 0x652, 0xF52) for p in (0, 2)}
+
+
 def ignored(addr):
-    return any(a <= addr < b for a, b, _ in IGNORE)
+    return addr in HUD_STAMP or any(a <= addr < b for a, b, _ in IGNORE)
 
 
 # Segment registers the original allocates at run time, and the constants our

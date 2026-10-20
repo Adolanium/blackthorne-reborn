@@ -123,6 +123,10 @@ void Vm::draw_text_box(int col, int row) {
     put(col, row + h - 1, 6);
     for (int c = 1; c < w - 1; ++c) put(col + c, row + h - 1, 7);
     put(col + w - 1, row + h - 1, 8);
+    // sub_15D83 walks ds:28h (box start) and ds:26h (row start) through the layer.
+    const std::uint16_t start = static_cast<std::uint16_t>(g::kTextLayer + (row * 32 + col) * 2);
+    ds_.set_u16(0x28, start);
+    ds_.set_u16(g::kScratchX, static_cast<std::uint16_t>(start + (h - 1) * 0x40));
     if (style & 0xC000) {
         const int pc = (style & 0x4000) ? col + 1 : col + w - 5;
         for (int r = 0; r < 4; ++r)
@@ -219,6 +223,7 @@ Vm::Flow Vm::op_text_at() {
 void Vm::show_text_block(std::uint16_t addr) {
     auto w = [&](int o) { return ds_.u16(static_cast<std::uint16_t>(addr + o)); };
     prepare_text(w(1), w(3));
+    ds_.set_u16(g::kScratchX, w(6));  // sub_15CEF
     draw_text_box(w(6), w(8));
     draw_text(w(6), w(8));
     portrait_update();

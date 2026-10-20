@@ -83,6 +83,7 @@ private:
     void frame_tail();             // sub_1008C after the wait
     void iteration();              // sub_10043, falling into sub_1008C
     void latch_input();            // sub_10A87
+    void settle_input();           // sub_10A93
     void level_frames();           // sub_1011B: level change / pause loop
     void change_level();           // sub_1011B, level-exit branch
     void flip_screen();            // sub_100B6, loc_100F5
@@ -102,7 +103,7 @@ private:
     int nesting_ = 0;              // > 0 inside flips, fades, menus and level changes
     std::exception_ptr error_;
 
-    void music_action();           // sub_11C64: the header's music action
+    void music_action(int action); // the music action table at ds:295Ah
     void hud_init();               // sub_140DC + sub_1407B
     void hud_tick();               // sub_1411C (inventory cycling) + sub_14164 (health, inventory state)
     void cycle_palettes();         // sub_186C4

@@ -447,7 +447,12 @@ void Vm::despawn_actor(int s) {
 
 // 0x0E: despawn self and end the turn.
 Vm::Flow Vm::op_despawn_self() {
+    const std::uint16_t type = ds_.field(field::kType, self());
     despawn_actor(self());
+    // The original's ip register (bx) now points at the type record
+    // (sub_11605 -> sub_1162E); an animation script that despawned its actor
+    // leaves that value as its ip (sub_1207C stores bx back).
+    ip_ = static_cast<std::uint16_t>(type * 16);
     return Flow::EndTurn;
 }
 
@@ -861,13 +866,14 @@ Vm::Flow Vm::op_scan() {
         }
     }
     ds_.set_u16(g::kScanSlot, static_cast<std::uint16_t>(best_slot));
-    ds_.set_u16(g::kScanMatch, best_match);
+    if (best_slot >= 0) ds_.set_u16(g::kScanMatch, best_match);  // left alone when nothing is found
     ds_.set_u16(g::kScanEdge, static_cast<std::uint16_t>(best_edge));
     const int cam = static_cast<std::int16_t>(ds_.u16(g::kCameraX));
     int range = dir > 0 ? std::min(cam + 0x110, best_edge) - x0
                         : x0 - std::max(std::max(cam - 16, 0), best_edge);
     int x = x0;
     bool blocked = false;
+    ds_.set_u16(0x62, static_cast<std::uint16_t>(range));  // the original keeps the range in ds:62h
     for (;;) {
         ds_.set_u16(g::kScratchX, static_cast<std::uint16_t>(x));
         ds_.set_u16(g::kScratchY, static_cast<std::uint16_t>(y));
@@ -875,6 +881,7 @@ Vm::Flow Vm::op_scan() {
         x += dir;
         ds_.set_u16(g::kScanX, static_cast<std::uint16_t>(x));
         range -= 16;
+        ds_.set_u16(0x62, static_cast<std::uint16_t>(range));
         if (range < 0) break;
     }
     if (KyleOnly) ds_.set_u16(ds_addr::kActorEnd, saved_end);

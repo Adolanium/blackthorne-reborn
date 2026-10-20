@@ -8,6 +8,10 @@ word the keyboard ISR and our Game::set_input fill) and the wait is released.
 
 Usage:
   python btemu.py <BTHORNE dir> <ticks> <out.bin> [--input "from-to:hexbits,..."]
+                  [--poke "frame:hexaddr=hexvalue,..."]
+
+--poke writes data segment words at the boundary after the given frame (as
+bttrace does before the next tick), e.g. to set a password.
 
 out.bin holds one 64 KB data segment per tick. Requires `pip install unicorn`.
 """
@@ -27,6 +31,16 @@ MEM_TOP = 0xA000           # conventional memory ends where VGA memory starts
 FRAME_WAIT = 0x10113       # sub_10113: cmp ds:5312h, 0 / jg sub_10113
 EMS_FRAME = 0xE000
 EMS_PAGES = 512            # 8 MB of expanded memory
+
+
+def parse_pokes(spec):
+    """'frame:addr=value,...' (hex address and value) -> {frame: [(addr, value)]}."""
+    out = {}
+    for part in filter(None, (spec or '').split(',')):
+        frame, rest = part.split(':')
+        addr, value = rest.split('=')
+        out.setdefault(int(frame), []).append((int(addr, 16), int(value, 16)))
+    return out
 
 
 def parse_input(spec):
@@ -352,9 +366,11 @@ def main():
     ap.add_argument('ticks', type=int)
     ap.add_argument('out')
     ap.add_argument('--input', default='')
+    ap.add_argument('--poke', default='')
     ap.add_argument('--budget', type=int, default=20_000_000, help='instructions allowed per tick')
     args = ap.parse_args()
     schedule = parse_input(args.input)
+    pokes = parse_pokes(args.poke)
     scratch = tempfile.mkdtemp(prefix='btemu_')
     m = Machine(args.game_dir, scratch)
     out = open(args.out, 'wb')
@@ -373,6 +389,8 @@ def main():
             if a <= t <= b:
                 bits |= v
         uc.mem_write((ds << 4) + 0x2A82, struct.pack('<H', bits))
+        for addr, value in pokes.get(t, []):
+            uc.mem_write((ds << 4) + addr, struct.pack('<H', value))
         uc.mem_write((ds << 4) + 0x5312, b'\0\0')
         if t >= args.ticks:
             uc.emu_stop()

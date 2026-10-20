@@ -69,6 +69,11 @@ void Audio::handle(const VmEvent& event, const DataSegment& ds) {
             default: break;
         }
     }
+    if (event.kind == VmEvent::Kind::StopAllSounds) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        voices_.clear();
+        return;
+    }
     if (event.kind != VmEvent::Kind::PlaySound && event.kind != VmEvent::Kind::StopSound) return;
     if (!ds.u16(kSoundOn)) return;
     const std::uint16_t v = ds.u16(static_cast<std::uint16_t>(kSoundTable + (event.id - 0x80) * 2));
