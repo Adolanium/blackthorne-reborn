@@ -38,6 +38,13 @@ def differing(a, b, out=None):
 
 
 def one(args, level):
+    try:
+        return run_level(args, level)
+    except subprocess.CalledProcessError as e:
+        return False, 'level %X: tool failed (%s)' % (level, e.cmd[1] if len(e.cmd) > 1 else e)
+
+
+def run_level(args, level):
     spec, pokes = check.schedule(level, args.frames, 1)
     frames = list(range(args.every, args.frames + 1, args.every))
     ours = os.path.join(args.work, 'sc_ours_%X.bin' % level)
