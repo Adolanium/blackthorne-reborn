@@ -54,9 +54,9 @@ def ignored(addr):
 
 # Segment registers the original allocates at run time, and the constants our
 # engine uses instead (machine.h, vm.h): script data (ds:259Ah), actor frames
-# (ds:259Eh), static sprites (ds:25A0h). A segment value matches when it sits
+# (ds:259Eh), static sprites (ds:25A0h), tile animation frames (ds:2594h). A segment value matches when it sits
 # at the same distance from its base.
-SEGMENT_BASES = ((0x259A, 0x4000), (0x259E, 0x5000), (0x25A0, 0x6000))
+SEGMENT_BASES = ((0x259A, 0x4000), (0x259E, 0x5000), (0x25A0, 0x6000), (0x2594, 0x8000))
 
 
 def same_segment(frame_a, va, vb):

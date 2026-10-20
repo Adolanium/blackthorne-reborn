@@ -13,7 +13,7 @@ constexpr std::uint16_t kBasePalette = 0x4A12, kShownPalette = 0x4D12;
 // Globals the level loader resets (the zeroing block at the top of sub_105B4).
 constexpr std::uint16_t kResetGlobals[] = {
     0x000, 0x002, 0x004, 0x312, 0x30E, 0x310, 0x34C, 0x390, 0x316, 0x32C, 0x358, 0x35A, 0x35C, 0x35E, 0x362,
-    0x1A82, 0x340, 0x342, 0x344, 0x346, 0x348, 0x34A, 0x31A, 0x1B6E, 0x1B70, 0x1B72, 0x1B74, 0x1B76, 0x1B78,
+    0x2A82, 0x340, 0x342, 0x344, 0x346, 0x348, 0x34A, 0x31A, 0x1B6E, 0x1B70, 0x1B72, 0x1B74, 0x1B76, 0x1B78,
     0x1B7A, 0x1B7C, 0x320, 0x322, 0x324,
 };
 
@@ -167,6 +167,7 @@ void Game::load_level_data(int level_id, int x, int y) {
     ds.set_u16(0x326, 0xFFFF);
     for (std::uint16_t a = 0x452; a < 0x452 + 0xDE0; a = static_cast<std::uint16_t>(a + 2)) ds.set_u16(a, 0);  // sub_11F38
     ds.set_u16(0x259E, Machine::kFrameSeg);
+    ds.set_u16(0x2594, Machine::kTileAnimSeg);
     ds.set_u16(0x25A0, Machine::kStaticSeg);
     machine_->frames.fill(0);
     machine_->statics.fill(0);
@@ -347,7 +348,7 @@ void Game::walk_descriptor() {
         ds.set_u16(static_cast<std::uint16_t>(0x1C2A + si), static_cast<std::uint16_t>(ds.u8(static_cast<std::uint16_t>(o + 3)) << 6));
         ds.set_u16(static_cast<std::uint16_t>(0x1C3A + si), static_cast<std::uint16_t>(u16(static_cast<std::uint16_t>(o + 4)) >> 5));
         ds.set_u16(static_cast<std::uint16_t>(0x1C4A + si), at_anim);
-        ds.set_u16(static_cast<std::uint16_t>(0x1C5A + si), 0);
+        ds.set_u16(static_cast<std::uint16_t>(0x1C5A + si), Machine::kTileAnimSeg);
         for (std::uint8_t b : archive_.resource(u16(static_cast<std::uint16_t>(o + 6)))) machine_->tile_anims[at_anim++] = b;
     }
     o = static_cast<std::uint16_t>(o + 1);

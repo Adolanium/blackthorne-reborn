@@ -367,6 +367,7 @@ def main():
     ap.add_argument('out')
     ap.add_argument('--input', default='')
     ap.add_argument('--poke', default='')
+    ap.add_argument('--map', action='store_true', help='also write the map segment per tick to <out>.map')
     ap.add_argument('--budget', type=int, default=20_000_000, help='instructions allowed per tick')
     args = ap.parse_args()
     schedule = parse_input(args.input)
@@ -374,6 +375,7 @@ def main():
     scratch = tempfile.mkdtemp(prefix='btemu_')
     m = Machine(args.game_dir, scratch)
     out = open(args.out, 'wb')
+    map_out = open(args.out + '.map', 'wb') if args.map else None
     state = {'tick': 0}
 
     def on_wait(uc, address, size, _):
@@ -382,6 +384,9 @@ def main():
         if wait <= 0:
             return
         out.write(m.ds_bytes())
+        if map_out:
+            seg = struct.unpack('<H', uc.mem_read((ds << 4) + 0x259C, 2))[0]
+            map_out.write(bytes(uc.mem_read(seg << 4, 0x10000)))
         state['tick'] += 1
         t = state['tick']
         bits = 0
@@ -413,6 +418,8 @@ def main():
             print('no frame within %d instructions, at %04X:%04X' % (args.budget, cs, ip))
             break
     out.close()
+    if map_out:
+        map_out.close()
     for line in m.log[-40:]:
         print(line)
     print('ticks recorded: %d%s' % (state['tick'], '' if m.exited is None else ', exited with %d' % m.exited))

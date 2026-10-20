@@ -193,7 +193,9 @@ private:
 
     void flip(int slot, bool vertical);                    // sub_1103A, sub_110B0
     // Map cell scans (sub_17FB8 family): true on a class hit, sets ds:354h.
-    bool scan_row(std::uint8_t list, int y, int x0, int x1);
+    // Records the class found in ds:354h unless record_class is false (the
+    // landing check, sub_1806F, does not).
+    bool scan_row(std::uint8_t list, int y, int x0, int x1, bool record_class = true);
     bool scan_column(std::uint8_t list, int x, int y0, int y1);
     bool probe_point_actor(std::uint8_t list, int px, int py);  // sub_183BE / sub_1844F
     void redraw_tile(std::uint16_t tx, std::uint16_t ty, std::uint16_t v);  // sub_18910

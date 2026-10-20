@@ -758,7 +758,8 @@ Vm::Flow Vm::op_event_terrain() {
                 ds_.set_u16(g::kScratchY, static_cast<std::uint16_t>(s));
                 const int old_row = (fld(field::kBottom) - fld(field::kY) + fld(f::kPrevY)) & 0xFFF0;
                 ds_.set_u16(g::kTmp10, static_cast<std::uint16_t>(old_row));
-                if ((fld(field::kBottom) & 0xFFF0) != old_row) hit = scan_row(list, fld(field::kBottom), fld(field::kLeft), fld(field::kRight));
+                if ((fld(field::kBottom) & 0xFFF0) != old_row)
+                    hit = scan_row(list, fld(field::kBottom), fld(field::kLeft), fld(field::kRight), false);
             }
             if (hit) snap_vertical(s, 0);
         }
@@ -880,6 +881,7 @@ Vm::Flow Vm::op_scan() {
         if (scan_row(sel, y, x, x)) { blocked = true; break; }
         x += dir;
         ds_.set_u16(g::kScanX, static_cast<std::uint16_t>(x));
+        ds_.set_u16(g::kScratchX, static_cast<std::uint16_t>(x));  // loc_1790E copies the advanced x to ds:26h
         range -= 16;
         ds_.set_u16(0x62, static_cast<std::uint16_t>(range));
         if (range < 0) break;

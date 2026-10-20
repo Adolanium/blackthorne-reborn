@@ -24,6 +24,7 @@ struct Machine {
     static constexpr std::uint16_t kFrameSeg = 0x5000;   // ds:259Eh: actor frame buffers
     static constexpr std::uint16_t kStaticSeg = 0x6000;  // ds:25A0h: preloaded single-frame sprites
     static constexpr std::uint16_t kDataSeg = 0x7000;    // "ds" itself (HUD icons live in the data segment)
+    static constexpr std::uint16_t kTileAnimSeg = 0x8000;  // ds:2594h: tile animation frames
     std::array<std::uint8_t, 0x10000> frames{};
     std::array<std::uint8_t, 0x10000> statics{};
     // Tileset (ds:2596h: 64 planar bytes per 8x8 tile), its masks (ds:2598h:

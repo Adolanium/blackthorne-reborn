@@ -1,7 +1,8 @@
 // Records our engine's data segment after every tick, in the same format as
 // tools/emu/btemu.py records the original, for tools/emu/compare.py.
 // Usage: bttrace <DATA.DAT> <ticks> <out.bin> [--input "from-to:hexbits,..."]
-//                [--poke "frame:hexaddr=hexvalue,..."]
+//                [--poke "frame:hexaddr=hexvalue,..."] [--map]
+// --map also writes the map segment per tick to <out.bin>.map.
 // Input for tick k is the schedule's bits at k - 1, matching btemu.py, which
 // writes the word for the next tick at each frame boundary.
 
@@ -68,6 +69,9 @@ int main(int argc, char** argv) {
         if (std::string(argv[i]) == "--input") spec = argv[i + 1];
         if (std::string(argv[i]) == "--poke") poke_spec = argv[i + 1];
     }
+    bool with_map = false;
+    for (int i = 4; i < argc; ++i)
+        if (std::string(argv[i]) == "--map") with_map = true;
     const auto schedule = parse_input(spec);
     const auto pokes = parse_pokes(poke_spec);
 
@@ -75,6 +79,8 @@ int main(int argc, char** argv) {
     bt::Game game(archive, data.parent_path() / "BTHORNE.EXE");
     game.boot();
     std::ofstream out(argv[3], std::ios::binary);
+    std::ofstream map_out;
+    if (with_map) map_out.open(std::string(argv[3]) + ".map", std::ios::binary);
     for (int t = 1; t <= ticks; ++t) {
         std::uint16_t bits = 0;
         for (const Span& s : schedule)
@@ -85,6 +91,7 @@ int main(int argc, char** argv) {
         game.tick();
         game.vm().events().clear();
         out.write(reinterpret_cast<const char*>(game.machine().ds.raw()), bt::DataSegment::kSize);
+        if (with_map) map_out.write(reinterpret_cast<const char*>(game.machine().map.data()), static_cast<std::streamsize>(game.machine().map.size()));
     }
     std::printf("ticks recorded: %d, level %02X\n", ticks, game.level_id());
     return 0;
