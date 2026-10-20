@@ -40,6 +40,9 @@ void Game::boot() {
     // sub_10E05
     for (std::uint16_t a : {std::uint16_t{0x302}, std::uint16_t{0x304}, std::uint16_t{0x31A}, std::uint16_t{0x328}, std::uint16_t{0x32A}, std::uint16_t{0x318}}) ds.set_u16(a, 0);
     ds.set_u16(0x386, 0xFFFF);
+    // sub_10D0D takes these from the setup program's config: music and sound on.
+    ds.set_u16(0x37E, 1);
+    ds.set_u16(0x380, 1);
     const char start[4] = {'S', 'T', 'R', 'T'};
     for (int k = 0; k < 4; ++k) ds.set_u16(static_cast<std::uint16_t>(0x372 + 2 * k), static_cast<std::uint8_t>(start[k]));
     // sub_128E9: Kyle's starting flags and the first level.

@@ -112,6 +112,29 @@ void test_game(const bt::Archive& a, const std::filesystem::path& exe) {
     }
 }
 
+void test_boot_sounds(const bt::Archive& a, const std::filesystem::path& exe) {
+    bt::Game game(a, exe);
+    int samples = 0, midi = 0, none = 0;
+    try {
+        game.boot();
+        for (int t = 0; t < 1500; ++t) {
+            if (t >= 720 && t <= 722) game.set_input(bt::Game::kDown);
+            else if (t >= 740 && t <= 742) game.set_input(bt::Game::kEnter);
+            else game.set_input(0);
+            game.tick();
+            for (const auto& ev : game.vm().events()) {
+                if (ev.kind != bt::VmEvent::Kind::PlaySound) continue;
+                const std::uint16_t v = game.machine().ds.u16(static_cast<std::uint16_t>(0x2964 + (ev.id - 0x80) * 2));
+                if (v == 0x3E8) ++none; else if (v & 0x8000) ++samples; else ++midi;
+            }
+            game.vm().events().clear();
+        }
+        std::printf("boot: %d sample sounds, %d MIDI sounds, %d silent ids in 1500 ticks\n", samples, midi, none);
+    } catch (const std::exception& e) {
+        check(false, std::string("boot runs 1500 ticks: ") + e.what());
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -128,6 +151,7 @@ int main(int argc, char** argv) {
     test_music(archive);
     test_data_segment(path.parent_path() / "BTHORNE.EXE");
     test_game(archive, path.parent_path() / "BTHORNE.EXE");
+    test_boot_sounds(archive, path.parent_path() / "BTHORNE.EXE");
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "OK", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 
+#include "audio/audio.h"
 #include "data/archive.h"
 #include "engine/game.h"
 #include "render/renderer.h"
@@ -59,6 +60,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     const bt::Renderer renderer(*archive);
+    bt::Audio audio(*archive);
 
     if (!SDL_Init(SDL_INIT_VIDEO)) return 1;
     SDL_Window* window = nullptr;
@@ -67,6 +69,7 @@ int main(int argc, char** argv) {
                                      SDL_WINDOW_RESIZABLE, &window, &sdl))
         return 1;
     SDL_SetRenderVSync(sdl, 1);
+    audio.open();  // the game runs silently if there is no audio device
     SDL_Texture* tex = SDL_CreateTexture(sdl, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
                                          bt::Renderer::kWidth, bt::Renderer::kHeight);
     SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
@@ -94,8 +97,10 @@ int main(int argc, char** argv) {
                 running = false;
                 break;
             }
-            for (const bt::VmEvent& ev : game->vm().events())
+            for (const bt::VmEvent& ev : game->vm().events()) {
                 if (ev.kind == bt::VmEvent::Kind::Quit) running = false;
+                audio.handle(ev, game->machine().ds);
+            }
             game->vm().events().clear();
         }
         if (acc > kTickSeconds * 5) acc = 0;  // don't spiral after a stall
