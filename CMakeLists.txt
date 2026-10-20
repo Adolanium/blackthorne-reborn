@@ -22,15 +22,21 @@ add_library(btdata STATIC
 )
 target_include_directories(btdata PUBLIC src)
 
+add_library(btengine STATIC
+    src/engine/data_segment.cpp
+)
+target_link_libraries(btengine PUBLIC btdata)
+
 add_executable(btviewer src/viewer/main.cpp)
 target_link_libraries(btviewer PRIVATE btdata SDL3::SDL3-static)
 
 if(MSVC)
     target_compile_options(btdata PRIVATE /W4 /permissive-)
     target_compile_options(btviewer PRIVATE /W4 /permissive-)
+    target_compile_options(btengine PRIVATE /W4 /permissive-)
 endif()
 
 enable_testing()
 add_executable(bttests tests/data_tests.cpp)
-target_link_libraries(bttests PRIVATE btdata)
+target_link_libraries(bttests PRIVATE btengine)
 add_test(NAME data COMMAND bttests)

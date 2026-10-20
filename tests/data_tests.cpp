@@ -10,6 +10,7 @@
 #include "data/archive.h"
 #include "data/level.h"
 #include "data/sprites.h"
+#include "engine/data_segment.h"
 
 namespace {
 
@@ -62,6 +63,14 @@ void test_actor_types(const bt::Archive& a) {
     check(types[0].parts == 3, "type 0 has 3 parts");
 }
 
+void test_data_segment(const std::filesystem::path& exe) {
+    const bt::DataSegment ds(exe);
+    check(ds.u16(0x28CA + 2) == 0x28, "field table entry 1 is 0x28");
+    check(ds.u8(0x70EE) == 'F' && ds.u8(0x70F3) == 'R', "FASTER cheat string at ds:70EEh");
+    check(ds.u8(0x60CC) == 0x00 && ds.u8(0x60CD) == 0xFF, "terrain set table at ds:60CCh");
+    check(bt::DataSegment::field_base(14) == 0x15F2, "field 14 is x");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -75,6 +84,7 @@ int main(int argc, char** argv) {
     test_archive(archive);
     test_levels(archive);
     test_actor_types(archive);
+    test_data_segment(path.parent_path() / "BTHORNE.EXE");
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "OK", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }
