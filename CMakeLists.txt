@@ -66,5 +66,8 @@ add_executable(btvmtests tests/vm_tests.cpp)
 target_link_libraries(btvmtests PRIVATE btengine)
 add_test(NAME vm COMMAND btvmtests)
 
+add_executable(btsoak tests/soak.cpp)
+target_link_libraries(btsoak PRIVATE btengine)
+
 add_executable(btprobe tests/probe.cpp)
 target_link_libraries(btprobe PRIVATE btengine)
