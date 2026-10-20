@@ -1,11 +1,12 @@
 // Records our engine's data segment after every tick, in the same format as
 // tools/emu/btemu.py records the original, for tools/emu/compare.py.
 // Usage: bttrace <DATA.DAT> <ticks> <out.bin> [--input "from-to:hexbits,..."]
-//                [--poke "frame:hexaddr=hexvalue,..."] [--map]
+//                [--poke "frame:hexaddr=hexvalue,..."] [--map] [--savegame XXXX]
 // --map also writes the map segment per tick to <out.bin>.map.
 // Input for tick k is the schedule's bits at k - 1, matching btemu.py, which
 // writes the word for the next tick at each frame boundary.
 
+#include <array>
 #include <cstdio>
 #include <exception>
 #include <cstdlib>
@@ -71,13 +72,21 @@ int main(int argc, char** argv) {
         if (std::string(argv[i]) == "--poke") poke_spec = argv[i + 1];
     }
     bool with_map = false;
-    for (int i = 4; i < argc; ++i)
+    std::string savegame;
+    for (int i = 4; i < argc; ++i) {
         if (std::string(argv[i]) == "--map") with_map = true;
+        if (std::string(argv[i]) == "--savegame" && i + 1 < argc) savegame = argv[i + 1];
+    }
     const auto schedule = parse_input(spec);
     const auto pokes = parse_pokes(poke_spec);
 
     bt::Archive archive(data);
     bt::Game game(archive, data.parent_path() / "BTHORNE.EXE");
+    if (!savegame.empty())  // what savegame.000 holds for CONTINUE
+        game.vm().load_password_ = [savegame](std::array<char, 4>& pw) {
+            for (std::size_t k = 0; k < 4; ++k) pw[k] = k < savegame.size() ? savegame[k] : ' ';
+            return true;
+        };
     game.boot();
     std::ofstream out(argv[3], std::ios::binary);
     std::ofstream map_out;

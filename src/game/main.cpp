@@ -5,6 +5,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -253,12 +254,13 @@ void save_settings(const std::filesystem::path& path, const Settings& s) {
 
 }  // namespace
 
-// blackthorne [DATA.DAT] [--filter 0-3] [--wide 0|1] [--level hex] [--size WxH --ticks N --shot out.bmp]
+// blackthorne [DATA.DAT] [--filter 0-3] [--wide 0|1] [--level hex]
+//             [--size WxH --ticks N --shot out.bmp [--input spec] [--keys frame:TEXT]] [--size WxH --ticks N --shot out.bmp]
 // The last three render one frame after N ticks to a BMP and exit (for tests).
 int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
     int wide_arg = -1, filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
-    std::string shot;
+    std::string shot, input_spec, keys_spec;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         const char* next = i + 1 < argc ? argv[i + 1] : "";
@@ -267,6 +269,8 @@ int main(int argc, char** argv) {
         else if (a == "--level") level_arg = static_cast<int>(std::strtol(next, nullptr, 16)), ++i;
         else if (a == "--ticks") ticks_arg = std::atoi(next), ++i;
         else if (a == "--shot") shot = next, ++i;
+        else if (a == "--input") input_spec = next, ++i;
+        else if (a == "--keys") keys_spec = next, ++i;
         else if (a == "--size") {
             char* end = nullptr;
             width = static_cast<int>(std::strtol(next, &end, 10));
@@ -295,6 +299,13 @@ int main(int argc, char** argv) {
     const char* pref = SDL_GetPrefPath("Adolanium", "BlackthorneReborn");
     const std::filesystem::path save_path = std::filesystem::path(pref ? pref : "") / "quicksave.bts";
     const std::filesystem::path settings_path = std::filesystem::path(pref ? pref : "") / "settings.ini";
+    // The game's own progress file (the original's d:\savegame.000): the 4
+    // characters of the last level password, read by CONTINUE (opcode FB).
+    const std::filesystem::path password_path = std::filesystem::path(pref ? pref : "") / "savegame.000";
+    game->vm().load_password_ = [password_path](std::array<char, 4>& pw) {
+        std::ifstream in(password_path, std::ios::binary);
+        return static_cast<bool>(in.read(pw.data(), 4));
+    };
     SDL_free(const_cast<char*>(pref));
     SDL_Window* window = nullptr;
     SDL_Renderer* sdl = nullptr;
@@ -313,7 +324,38 @@ int main(int argc, char** argv) {
     render_opt.extra = settings.wide ? bt::kWideExtra : 0;
     if (!shot.empty()) {
         bt::Image frame;
-        for (int t = 0; t < ticks_arg; ++t) {
+        // Scripted input as bttrace takes it ("from-to:hexbits,..."; tick k
+        // uses the bits at k - 1) and typed text ("frame:TEXT", one key per
+        // frame from that frame on).
+        struct Span { int from, to; unsigned bits; };
+        std::vector<Span> spans;
+        for (std::size_t pos = 0; pos < input_spec.size();) {
+            std::size_t end = input_spec.find(',', pos);
+            if (end == std::string::npos) end = input_spec.size();
+            const std::string part = input_spec.substr(pos, end - pos);
+            char* p = nullptr;
+            Span s{};
+            s.from = static_cast<int>(std::strtol(part.c_str(), &p, 10));
+            if (*p == '-') s.to = static_cast<int>(std::strtol(p + 1, &p, 10));
+            if (*p == ':') {
+                s.bits = static_cast<unsigned>(std::strtoul(p + 1, nullptr, 16));
+                spans.push_back(s);
+            }
+            pos = end + 1;
+        }
+        int keys_from = -1;
+        std::string keys;
+        if (const std::size_t colon = keys_spec.find(':'); colon != std::string::npos) {
+            keys_from = std::atoi(keys_spec.c_str());
+            keys = keys_spec.substr(colon + 1);
+        }
+        for (int t = 1; t <= ticks_arg; ++t) {
+            unsigned bits = 0;
+            for (const Span& s : spans)
+                if (s.from <= t - 1 && t - 1 <= s.to) bits |= s.bits;
+            game->set_input(static_cast<std::uint16_t>(bits));
+            const int k = t - 1 - keys_from;
+            if (keys_from >= 0 && k >= 0 && k < static_cast<int>(keys.size())) game->type_key(keys[static_cast<std::size_t>(k)]);
             game->tick();
             game->vm().events().clear();
         }
@@ -389,6 +431,12 @@ int main(int argc, char** argv) {
             }
             for (const bt::VmEvent& ev : game->vm().events()) {
                 if (ev.kind == bt::VmEvent::Kind::Quit) running = false;
+                if (ev.kind == bt::VmEvent::Kind::SavePassword) {  // sub_10C0D writes ds:64E7h
+                    const bt::DataSegment& ds = game->machine().ds;
+                    const char pw[4] = {static_cast<char>(ds.u8(0x64E7)), static_cast<char>(ds.u8(0x64E8)),
+                                        static_cast<char>(ds.u8(0x64E9)), static_cast<char>(ds.u8(0x64EA))};
+                    std::ofstream(password_path, std::ios::binary).write(pw, 4);
+                }
                 audio.handle(ev, game->machine().ds);
             }
             game->vm().events().clear();

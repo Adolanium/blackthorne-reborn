@@ -327,7 +327,10 @@ Vm::Flow Vm::op_load_password() {
     std::array<char, 4> pw = {'S', 'T', 'R', 'T'};
     if (load_password_) {
         std::array<char, 4> saved{};
-        if (load_password_(saved)) pw = saved;
+        if (load_password_(saved)) {  // sub_10B07 reads the file into ds:64E7h
+            pw = saved;
+            for (int k = 0; k < 4; ++k) ds_.set_u8(static_cast<std::uint16_t>(g::kLastPassword + k), static_cast<std::uint8_t>(saved[k]));
+        }
     }
     for (int k = 0; k < 4; ++k) ds_.set_u16(static_cast<std::uint16_t>(g::kPassword + 2 * k), static_cast<std::uint8_t>(pw[k]));
     return op_apply_password();

@@ -368,11 +368,14 @@ def main():
     ap.add_argument('--input', default='')
     ap.add_argument('--poke', default='')
     ap.add_argument('--map', action='store_true', help='also write the map segment per tick to <out>.map')
+    ap.add_argument('--savegame', default='', help='4-character password to put in savegame.000')
     ap.add_argument('--budget', type=int, default=20_000_000, help='instructions allowed per tick')
     args = ap.parse_args()
     schedule = parse_input(args.input)
     pokes = parse_pokes(args.poke)
     scratch = tempfile.mkdtemp(prefix='btemu_')
+    if args.savegame:
+        open(os.path.join(scratch, 'savegame.000'), 'wb').write(args.savegame.encode('ascii')[:4])
     m = Machine(args.game_dir, scratch)
     out = open(args.out, 'wb')
     map_out = open(args.out + '.map', 'wb') if args.map else None
