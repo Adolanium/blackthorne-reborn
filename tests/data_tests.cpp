@@ -99,6 +99,13 @@ void test_game(const bt::Archive& a, const std::filesystem::path& exe) {
         for (int s = 0; s < 0x28; s += 2) live += ds.field(bt::field::kScriptSeg, s) != 0;
         std::printf("level 1: %d live actors after load\n", live);
         for (int t = 0; t < 300; ++t) game.tick();
+        for (int sl = 0; sl < 0x28; sl += 2) {
+            if (!ds.field(bt::field::kScriptSeg, sl)) continue;
+            const int p0 = ds.field(0x198A, sl), n = ds.field(0x19B2, sl);
+            std::printf("  slot %2d type %02X at (%d,%d) parts %d first %02X colour %04X flags %04X frame %d\n", sl / 2,
+                        ds.field(bt::field::kType, sl), ds.field(bt::field::kX, sl), ds.field(bt::field::kY, sl), n, p0,
+                        n ? ds.field(0xF52, p0) : 0, ds.field(bt::field::kFlags, sl), static_cast<std::int16_t>(ds.field(0x1782, sl)));
+        }
         std::printf("level 1: Kyle at (%d,%d) after 300 ticks\n", ds.field(bt::field::kX, 0), ds.field(bt::field::kY, 0));
     } catch (const std::exception& e) {
         check(false, std::string("level 1 runs 300 ticks: ") + e.what());

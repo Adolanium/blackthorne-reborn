@@ -23,6 +23,12 @@ Game::Game(const Archive& archive, const std::filesystem::path& exe_path, int la
     machine_->ds = DataSegment(exe_path);
     machine_->scripts = archive.entry(64);
     machine_->text = archive.entry(1 + std::clamp(language, 0, 2));
+    // sub_19046 (startup): unpack the sprite palettes listed at ds:6A78h, in
+    // order, into the table at ds:6ABCh that palette slots copy from.
+    DataSegment& ds = machine_->ds;
+    std::uint16_t dst = 0x6ABC;
+    for (std::uint16_t a = 0x6A78; ds.u16(a) != 0xFFFF; a = static_cast<std::uint16_t>(a + 2))
+        for (std::uint8_t b : archive.resource(ds.u16(a))) ds.set_u8(dst++, b);
     vm_ = std::make_unique<Vm>(*machine_);
 }
 
