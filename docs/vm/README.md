@@ -95,3 +95,29 @@ Mode X tweaked to 320x240: CRTC table at `ds:5316h` (vertical display end
 - Typing `FASTER` (string at `ds:70EEh`, matched by `sub_190C1`) toggles
   `ds:68h` between 2 and 1, i.e. 30 and 60 ticks per second.
 - A second AIL timer at 250 ms (`ds:253Ch`, `sub_19566`) drives music fades.
+
+## Main loop (`sub_10043`, once per tick)
+
+Order of calls, with what is known so far:
+
+| Call | Role |
+|---|---|
+| `sub_10A6B` (if `ds:6Ah != ds:6Ch`) | streams a raw resource into seg001 |
+| `sub_101BA` | input latch handling |
+| `sub_10A87` | input / HUD helpers |
+| `loc_12A12`, `sub_190C1` | `FASTER` cheat check |
+| `sub_1011B` | level transitions (reload via `sub_105B4`) and pause |
+| `sub_1601A` | **actor scheduler**: for each slot `< ds:32Ch`, `sub_1603F` runs the script until it yields, then `sub_15FCE` runs actors spawned during this tick |
+| `sub_1290E` | death / game-over handling |
+| `sub_10179` | blink effect on parts (`452h` bit 0x40) |
+| `sub_111BC`, `sub_11260` | **open** |
+| `sub_17AC7`, `sub_17AB2` | second and third script passes over all actors (`sub_17ADC`, `sub_17AE9`) with `ds:33Eh` = +1 / -1; likely event handlers |
+| `sub_11F49` | per-actor pass in reverse slot order (`sub_11F59`) |
+| `loc_114AE` | spawn window: camera `ds:1B4Eh`, `1B50h` minus 16, 288 x 256 px; spawns records that overlap it and sets flag 0x200 on actors that leave it |
+| `sub_100B6` | draw (calls the page flip `sub_1283B`) |
+| `sub_1411C`, `sub_14164` | HUD |
+
+Scheduler details (`sub_1603F`): an actor slot is live when field `125Ah`
+(script segment) is non-zero. Flag 0x1000 counts down field `15CAh`. Flag
+0x200, or global `ds:316h`, restarts the script at the type's entry offset.
+`ds:2Ah` = current slot; `ds:2Ch` = scheduler slot.
