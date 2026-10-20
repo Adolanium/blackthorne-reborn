@@ -5,7 +5,11 @@ reads the original `DATA.DAT`, aiming for modern rendering (widescreen,
 high-resolution output, smooth scaling, shaders), modern input and modern
 saves.
 
-No game data is included. You need your own copy of the game.
+No game data is included. You need your own copy of the game (it was released
+as a free Blizzard Classics download in 2013).
+
+This is an unofficial fan project, not affiliated with or endorsed by Blizzard
+Entertainment. Blackthorne and all game assets are Blizzard's property.
 
 ## Layout
 
