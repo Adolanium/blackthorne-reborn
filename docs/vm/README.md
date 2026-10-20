@@ -18,6 +18,8 @@ the return address (`pop ax`) and return to the scheduler. Opcode 0x00 yields:
 it saves `ip` to the actor's field `1232h` and the link register to `184Ah`.
 
 - `ds:2Ah` holds the current actor slot (0, 2, ..., 0x26: 20 actors).
+- `ds:38h` is the accumulator used by load (0x3B-0x3F), combine/store
+  (0x41-0x64) and compare-and-branch (0x65-0x82) opcodes.
 - `es:bx` is the script pointer.
 - `ds:30h`/`ds:32h` form a one-level link register (return ip and segment)
   used by call (0x04, 0x05) and return (0x06).
@@ -36,9 +38,10 @@ the re-entry jump used when flag 0x200 restarts the script (`sub_1603F`).
 ## Actor fields
 
 Structure of arrays: field `k` is a 20-word array at
-`ds:0x13C2 + k * 0x28`, indexed by slot. Scripts name fields by `k` through
-the table at `ds:28CAh` (entry k = k * 0x28). Fields below 0x13C2 are
-internal (negative k).
+`ds:0x13C2 + k * 0x28`, indexed by slot. Scripts name a field by the byte
+`2k` (a byte offset into the word table at `ds:28CAh`, whose entry k is
+`k * 0x28`); for example operand `08` is field 4, the flags. Fields below
+0x13C2 are internal (negative k).
 
 | Address | k | Meaning |
 |---|---|---|
@@ -70,10 +73,10 @@ Each mode selects how the next operand is read:
 | Mode | Script bytes | Value |
 |---|---|---|
 | 0 | u16 | immediate |
-| 1 | u8 k | current actor's field k |
+| 1 | u8 2k | current actor's field k |
 | 2 | u16 addr | global word at `ds:addr` |
-| 3 | u8 k | field k of the target actor (`17FAh`) |
-| 4 | u8 k | field k of the related actor (`1822h`) |
+| 3 | u8 2k | field k of the target actor (`17FAh`) |
+| 4 | u8 2k | field k of the related actor (`1822h`) |
 | 5 | none | random number (`sub_10C9F`) |
 
 ## Display
