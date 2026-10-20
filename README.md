@@ -49,7 +49,10 @@ Without an argument it looks in the default Blizzard Classics install folder.
 Arrows/WASD or mouse drag to scroll, wheel to zoom, PgUp/PgDn to change level,
 B/F to toggle background/foreground, C for the collision overlay, O for
 object spawns, Tab for the sprite browser (Left/Right
-to change bank). `--level N --zoom N --x PX --y PX --collision --objects --sprites --bank N
+to change bank). P runs the current level in the engine and G boots the whole
+game (logos, menu, intro); in play mode the arrows, F, R, Space, D, S, E, [ ]
+and Enter are the original controls. `--boot` / `--play --ticks N --input
+from-to:bits,...` drive the engine for screenshots. `--level N --zoom N --x PX --y PX --collision --objects --sprites --bank N
 --shot out.bmp` renders one
 frame to a file.
 

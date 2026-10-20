@@ -91,6 +91,8 @@ public:
             if (k[SDL_SCANCODE_RIGHTBRACKET]) bits |= G::kItemNext;
             if (k[SDL_SCANCODE_RETURN]) bits |= G::kEnter;
             bits |= scripted_input_;
+            for (const auto& r : input_script_)
+                if (ticks_ >= r.from && ticks_ <= r.to) bits |= r.bits;
             game_->set_input(bits);
             tick_acc_ += dt;
             int steps = 0;
@@ -359,6 +361,8 @@ private:
     std::string play_error_;
 public:
     std::uint16_t scripted_input_ = 0;  // for --hold in screenshot runs
+    struct InputRange { int from, to; std::uint16_t bits; };
+    std::vector<InputRange> input_script_;  // --input from-to:bits,...
 private:
     std::vector<bt::ActorType> actor_types_ = bt::load_actor_types(archive_);
     bt::Level level_;
@@ -383,6 +387,7 @@ int main(int argc, char** argv) {
     bool start_sprites = false, start_collision = false, start_objects = false, start_play = false, start_boot = false;
     int start_ticks = 0;
     std::uint16_t hold_bits = 0;
+    std::string input_spec;
     float start_x = 0, start_y = 0;
     int start_zoom = 3;
     for (int i = 1; i < argc; ++i) {
@@ -394,6 +399,7 @@ int main(int argc, char** argv) {
         else if (a == "--play") start_play = true;
         else if (a == "--boot") start_boot = true;
         else if (a == "--ticks" && i + 1 < argc) start_ticks = std::atoi(argv[++i]);
+        else if (a == "--input" && i + 1 < argc) input_spec = argv[++i];
         else if (a == "--hold" && i + 1 < argc) hold_bits = static_cast<std::uint16_t>(std::strtol(argv[++i], nullptr, 16));
         else if (a == "--objects") start_objects = true;
         else if (a == "--zoom" && i + 1 < argc) start_zoom = std::clamp(std::atoi(argv[++i]), 1, 8);
@@ -424,6 +430,20 @@ int main(int argc, char** argv) {
         viewer.open(start_level, start_sprites, start_bank, start_collision, start_objects, start_x, start_y, start_zoom);
         if (start_play || start_boot) {
             viewer.scripted_input_ = hold_bits;
+            for (std::size_t pos = 0; pos < input_spec.size();) {
+                const std::size_t end = std::min(input_spec.find(',', pos), input_spec.size());
+                // "from-to:hexbits"
+                const std::string item = input_spec.substr(pos, end - pos);
+                char* p = nullptr;
+                const long from = std::strtol(item.c_str(), &p, 10);
+                if (*p == '-') {
+                    const long to = std::strtol(p + 1, &p, 10);
+                    if (*p == ':')
+                        viewer.input_script_.push_back({static_cast<int>(from), static_cast<int>(to),
+                                                        static_cast<std::uint16_t>(std::strtol(p + 1, nullptr, 16))});
+                }
+                pos = end + 1;
+            }
             viewer.toggle_play(start_boot);
             for (int t = 0; t < start_ticks; ++t) viewer.update(1.0f / 30.0f);
         }
