@@ -38,12 +38,15 @@ target_link_libraries(btengine PUBLIC btdata)
 add_library(btrender STATIC src/render/renderer.cpp)
 target_link_libraries(btrender PUBLIC btengine)
 
+add_executable(blackthorne WIN32 src/game/main.cpp)
+target_link_libraries(blackthorne PRIVATE btrender SDL3::SDL3-static)
+
 add_executable(btviewer src/viewer/main.cpp)
 target_link_libraries(btviewer PRIVATE btrender SDL3::SDL3-static)
 
 if(MSVC)
     # /w44456-/w44459: warn when a declaration shadows another one.
-    foreach(t btdata btengine btrender btviewer)
+    foreach(t btdata btengine btrender btviewer blackthorne)
         target_compile_options(${t} PRIVATE /W4 /permissive- /w44456 /w44457 /w44458 /w44459)
     endforeach()
 endif()

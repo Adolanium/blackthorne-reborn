@@ -39,6 +39,18 @@ cd build && ctest -C Release --output-on-failure
 
 The tests read the original DATA.DAT and are skipped if it is not installed.
 
+## Play
+
+```
+build/Release/blackthorne.exe [path/to/DATA.DAT]
+```
+
+Boots the original game flow (logos, menu, intro, levels) on the new engine.
+Controls are the original ones: arrows move, F fires, R shoots backward,
+Space jumps, D runs, S draws/holsters the gun, E uses an item, [ and ] cycle
+the inventory, Enter confirms, Esc opens the menu. F11 toggles fullscreen.
+Sound, music and the HUD are not implemented yet.
+
 ## Level viewer
 
 ```
