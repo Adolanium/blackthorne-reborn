@@ -19,9 +19,11 @@ void check(bool ok, const std::string& what) {
 
 // Script buffer laid out as page 0x83 (offset == address).
 struct Fixture {
-    bt::Bytes scripts = bt::Bytes(0x200, 0);
-    bt::DataSegment ds;
+    bt::Machine m;
+    bt::Bytes& scripts = m.scripts;
+    bt::DataSegment& ds = m.ds;
     Fixture() {
+        scripts.assign(0x200, 0);
         // Field table at ds:28CAh: entry k = k * 0x28.
         for (int k = 0; k < 64; ++k) ds.set_u16(static_cast<std::uint16_t>(0x28CA + 2 * k), static_cast<std::uint16_t>(k * 0x28));
         for (int i = 0; i < 16; ++i) {
@@ -53,7 +55,7 @@ void test_load_store_branch() {
     std::copy(std::begin(prog), std::end(prog), f.scripts.begin() + 0x10 - 0x10);
     const std::uint8_t tail[] = {0x3B, 0x2A, 0x00, 0x42, 0x00, 0x01, 0x00};
     std::copy(std::begin(tail), std::end(tail), f.scripts.begin() + 0x18);
-    bt::Vm vm(f.ds, f.scripts);
+    bt::Vm vm(f.m);
     f.start(4, 0x00);
     vm.run_actor(4);
     check(f.ds.field(bt::field::kX, 4) == 8, "self.x == 8");
@@ -70,7 +72,7 @@ void test_call_return() {
     const std::uint8_t b[] = {0x3B, 0x07, 0x00, 0x42, 0x00, 0x01, 0x06};
     std::copy(std::begin(a), std::end(a), f.scripts.begin());
     std::copy(std::begin(b), std::end(b), f.scripts.begin() + 0x10);
-    bt::Vm vm(f.ds, f.scripts);
+    bt::Vm vm(f.m);
     f.start(0, 0);
     vm.run_actor(0);
     check(f.ds.u16(0x100) == 7, "called routine ran");
@@ -91,7 +93,7 @@ void test_bits_and_facing() {
         0x9C, 0x1E, 0x2E,        // set bit 15 of field 23, acc becomes 0x8000
         0x42, 0x02, 0x01,        // g[102h] = acc
         0x00});
-    bt::Vm vm(f.ds, f.scripts);
+    bt::Vm vm(f.m);
     f.start(2, 0);
     vm.run_actor(2);
     check(f.ds.u16(0x100) == 1, "bit test of facing flag");
@@ -127,7 +129,7 @@ void test_call_if_and_probe() {
         0x00,
     });
     f.load(0x30, {0x42, 0x00, 0x01, 0x06});  // g[100h] = acc; return
-    bt::Vm vm(f.ds, f.scripts);
+    bt::Vm vm(f.m);
     f.start(2, 0);
     vm.run_actor(2);
     check(f.ds.u16(0x356) == 0, "probe found slot 0");

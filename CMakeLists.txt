@@ -26,6 +26,7 @@ target_include_directories(btdata PUBLIC src)
 add_library(btengine STATIC
     src/engine/data_segment.cpp
     src/engine/vm.cpp
+    src/engine/vm_world.cpp
 )
 target_link_libraries(btengine PUBLIC btdata)
 

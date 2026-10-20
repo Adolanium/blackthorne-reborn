@@ -5,6 +5,7 @@
 
 #include "data/archive.h"
 #include "engine/data_segment.h"
+#include "engine/machine.h"
 
 namespace bt {
 
@@ -61,7 +62,7 @@ constexpr std::uint16_t kFacing = 0x40;  // selects add/sub direction and probe 
 // original game would.
 class Vm {
 public:
-    Vm(DataSegment& ds, const Bytes& scripts);
+    explicit Vm(Machine& machine);
 
     // Runs the actor in `slot` from its saved position until it yields or
     // ends its turn (sub_1603F's tail plus the interpreter loop).
@@ -95,6 +96,8 @@ private:
 
     // Operand by addressing mode (sub_17569): reads its operand bytes.
     std::uint16_t read_operand(int mode);
+    // Write-back by addressing mode (loc_175D6): modes 1-4 only.
+    void write_operand(int mode, std::uint16_t value);
     std::uint16_t rand16();
 
     void jump(std::uint16_t target) { ip_ = target; }
@@ -121,6 +124,38 @@ private:
     template <int Side, bool Negate> Flow op_probe();   // 0xB4-0xBB
     template <int Offset> Flow op_spawn_store();        // 0xBC-0xBF
 
+    // vm_world.cpp: actor orientation, movement modes, map access and probes.
+    void register_world_ops();
+    template <bool Vertical, bool Set> Flow op_flip_to();  // 0x07-0x0A
+    template <bool Vertical> Flow op_flip();               // 0x0B, 0x0C
+    Flow op_exit_level();                                  // 0x0D
+    Flow op_scratch_fn();                                  // 0x0F
+    template <int Who> Flow op_offset_to();                // 0x11, 0x12, 0x32
+    template <int Who> Flow op_anchor();                   // 0x13, 0x14, 0x18
+    Flow op_anim_start();                                  // 0x15
+    Flow op_anim_start_far();                              // 0x16
+    Flow op_if_anim_idle();                                // 0x19
+    template <int Kind, bool Negate> Flow op_edge_probe(); // 0x1B-0x22, 0x2B, 0x2C
+    Flow op_to_tile();                                     // 0x23
+    Flow op_tile_class();                                  // 0x24
+    Flow op_snap_to_tile();                                // 0x25
+    template <int What> Flow op_write_cell();              // 0x26-0x28
+    Flow op_find_exit();                                   // 0x29
+    Flow op_breakpoint();                                  // 0x31
+    Flow op_tint();                                        // 0x34
+    Flow op_tint_reset();                                  // 0x35
+    template <bool Hide> Flow op_parts_flag();             // 0x36, 0x37
+    Flow op_teleport();                                    // 0x38
+    template <bool Negate> Flow op_point_probe();          // 0x39, 0x3A
+
+    void flip(int slot, bool vertical);                    // sub_1103A, sub_110B0
+    // Map cell scans (sub_17FB8 family): true on a class hit, sets ds:354h.
+    bool scan_row(std::uint8_t list, int y, int x0, int x1);
+    bool scan_column(std::uint8_t list, int x, int y0, int y1);
+    bool probe_point_actor(std::uint8_t list, int px, int py);  // sub_183BE / sub_1844F
+    void redraw_tile(std::uint16_t tx, std::uint16_t ty, std::uint16_t v);  // sub_18910
+    void rebuild_palette();                                // sub_1266C
+
     std::uint16_t dest_addr(int dest);                  // reads a field byte or addr16
     std::uint16_t bit_mask(std::uint8_t b) const { return ds_.u16(static_cast<std::uint16_t>(ds_addr::kBitMasks + b)); }
     std::uint16_t read_bit(int mode);                   // bit8 then source operand -> 0/1
@@ -129,6 +164,7 @@ private:
     bool probe(int side, std::uint8_t list);            // sub_18331 / 1833E / 1829A / 182A7
     void spawn_record_store(int offset, std::uint16_t value);
 
+    Machine& m_;
     DataSegment& ds_;
     const Bytes& scripts_;
     std::array<Handler, 256> table_{};

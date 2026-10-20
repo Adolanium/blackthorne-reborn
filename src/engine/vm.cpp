@@ -58,7 +58,7 @@ std::uint16_t Vm::page_segment(std::uint16_t base, std::uint8_t page) {
     return static_cast<std::uint16_t>(base + rot - 0x800);
 }
 
-Vm::Vm(DataSegment& ds, const Bytes& scripts) : ds_(ds), scripts_(scripts) {
+Vm::Vm(Machine& machine) : m_(machine), ds_(machine.ds), scripts_(machine.scripts) {
     ds_.set_u16(ds_addr::kScriptBaseSeg, kScriptBase);
     table_.fill(&Vm::op_unimplemented);
     table_[0x00] = &Vm::op_yield;
@@ -153,6 +153,7 @@ Vm::Vm(DataSegment& ds, const Bytes& scripts) : ds_(ds), scripts_(scripts) {
     table_[0xBD] = &Vm::op_spawn_store<0x02>;
     table_[0xBE] = &Vm::op_spawn_store<0x0A>;
     table_[0xBF] = &Vm::op_spawn_store<0x0C>;
+    register_world_ops();
 }
 
 std::uint8_t Vm::script_byte(std::uint16_t seg, std::uint16_t ip) const {
@@ -182,6 +183,16 @@ std::uint16_t Vm::read_operand(int mode) {
         case kRelated: return ds_.u16(related_field(fetch8()));
         case kRandom: return rand16();
         default: throw std::runtime_error("bad operand mode");
+    }
+}
+
+void Vm::write_operand(int mode, std::uint16_t value) {
+    switch (mode) {
+        case kSelf: ds_.set_u16(self_field(fetch8()), value); return;
+        case kGlobal: ds_.set_u16(fetch16(), value); return;
+        case kTarget: ds_.set_u16(target_field(fetch8()), value); return;
+        case kRelated: ds_.set_u16(related_field(fetch8()), value); return;
+        default: throw std::runtime_error("bad write-back mode");  // 0 and 5 crash the original
     }
 }
 
