@@ -46,7 +46,16 @@ The tests read the original DATA.DAT and are skipped if it is not installed.
 build/Release/blackthorne.exe [path/to/DATA.DAT]
 ```
 
-Boots the original game flow (logos, menu, intro, levels) on the new engine.
+Boots the original game flow on the new engine: logos, intro, the title menu
+(PRACTICE, NEW GAME, OPTIONS for music and sound, CONTINUE, QUIT), then the
+levels and the ending. Progress is saved the way the original saves it: each
+level's password goes to `savegame.000` in the settings folder, and CONTINUE
+resumes from it. Typing FASTER during play toggles 60 frames a second, as in
+the original.
+
+The engine runs the original's frame loop step for step, and it is checked
+against the original game running headless (see
+[docs/ACCURACY.md](docs/ACCURACY.md)).
 Controls are the original ones: arrows move, F fires, R shoots backward,
 Space jumps, D runs, S draws/holsters the gun, E uses an item, [ and ] cycle
 the inventory, Enter confirms, Esc opens the menu, P asks to give up. F11
