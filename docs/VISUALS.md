@@ -78,7 +78,9 @@ python tools/artpack.py check  out/export packs/<name>
   overlaps and takes the transparency from the original layer. So the
   painting covers what the original covered, and whatever the model painted
   over the magenta is dropped. Outlines are smoothed to within a fraction of
-  a game pixel of the original's (`--edges hard` keeps the 1x shape exactly),
+  a game pixel of the original's (`--edges hard` keeps the 1x shape exactly;
+  `--alpha key` takes the outline from the painting itself, everything the
+  model didn't leave magenta, for a restyle that changes shapes),
   and magenta the model blended into edges is painted over from neighbouring
   pixels. Tiles without a repaint keep the
   original pixels, so you can repaint a level a few tiles at a time.

@@ -154,6 +154,13 @@ def smooth_alpha(alpha, size):
     return np.clip((a - 0.5) * 2.5 + 0.5, 0.0, 1.0) * 255.0
 
 
+def key_alpha(rgb):
+    """Opacity from the magenta key: 0 on the key colour, 1 a little away
+    from it."""
+    d = np.sqrt(((rgb - np.array(KEY, dtype=np.float64)) ** 2).sum(axis=2))
+    return np.clip((d - 60.0) / 80.0, 0.0, 1.0)
+
+
 def defringe(rgb, passes=12):
     """Models blend edges into the magenta key. Pixels with a magenta cast
     are refilled from their clean neighbours, growing inwards."""
@@ -193,6 +200,7 @@ def cmd_stitch(args):
             up = np.asarray(original.resize((W, H), Image.NEAREST), dtype=np.float64)
             colour = np.zeros((H, W, 3))
             weight = np.zeros((H, W))
+            keyed = np.zeros((H, W))  # the model's own opacity (not magenta), weighted
             repainted = 0
             for t in m["tiles"]:
                 path = os.path.join(base, "out", t["name"])
@@ -200,16 +208,23 @@ def cmd_stitch(args):
                     continue
                 repainted += 1
                 tw, th = t["w"] * SCALE, t["h"] * SCALE
-                tile = defringe(np.asarray(Image.open(path).convert("RGB").resize((tw, th), Image.LANCZOS), dtype=np.float64))
+                raw = np.asarray(Image.open(path).convert("RGB").resize((tw, th), Image.LANCZOS), dtype=np.float64)
+                tile = defringe(raw)
                 col, row = feather(tw, th, (t["x"], t["y"], t["w"], t["h"]), m["width"], m["height"], args.overlap)
                 wgt = np.outer(row, col)
                 ox, oy = t["x"] * SCALE, t["y"] * SCALE
                 colour[oy:oy + th, ox:ox + tw] += tile * wgt[:, :, None]
                 weight[oy:oy + th, ox:ox + tw] += wgt
+                keyed[oy:oy + th, ox:ox + tw] += key_alpha(raw) * wgt
             if not repainted:
                 continue
             out = up.copy()
-            if args.edges == "smooth":
+            if args.alpha == "key":
+                # The painting's own outline: everything the model didn't
+                # leave magenta. Shapes may differ from the original's.
+                done_w = weight > 0
+                out[done_w, 3] = keyed[done_w] / weight[done_w] * 255.0
+            elif args.edges == "smooth":
                 # Repainted parts get smooth outlines: the original's shape
                 # within a fraction of a game pixel.
                 alpha = smooth_alpha(original.getchannel("A"), (W, H))
@@ -396,6 +411,8 @@ def main():
     s.add_argument("--overlap", type=int, default=32, help="the overlap split used, at 1x")
     s.add_argument("--edges", choices=("smooth", "hard"), default="smooth",
                    help="outlines: smooth, or hard (the 1x shape in 4x blocks)")
+    s.add_argument("--alpha", choices=("shape", "key"), default="shape",
+                   help="transparency from the original's shape, or from the painting (not magenta)")
     s.set_defaults(func=cmd_stitch)
     s = sub.add_parser("nearest")
     s.add_argument("export")
