@@ -376,10 +376,8 @@ void Vm::spawn_visible_records() {
     std::int16_t win[4] = {static_cast<std::int16_t>(cx - 0x10), static_cast<std::int16_t>(cx - 0x10 + 0x120),
                            static_cast<std::int16_t>(cy - 0x10), static_cast<std::int16_t>(cy - 0x10 + 0x100)};
     for (int k = 0; k < 4; ++k) ds_.set_u16(static_cast<std::uint16_t>(g::kTmp12 + 2 * k), static_cast<std::uint16_t>(win[k] < 0 ? 0 : win[k]));
-    const std::uint16_t saved = ds_.u16(ds_addr::kCurrentSlot);
-    ds_.set_u16(ds_addr::kCurrentSlot, 0xFFFF);
+    ds_.set_u16(ds_addr::kCurrentSlot, 0xFFFF);  // left that way (loc_11366)
     for (int r = 0; check_record(r); ++r) {}
-    ds_.set_u16(ds_addr::kCurrentSlot, saved);
 }
 
 // loc_114AE: flag actors whose hot box left the window (they restart, which
