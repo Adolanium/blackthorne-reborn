@@ -32,7 +32,10 @@ adds presentation upgrades on top.
 - [x] Frame-exact main loop (screen flips, fades, menus) checked against the
       original running headless (docs/ACCURACY.md)
 - [x] Accuracy check on every level (4,000 frames of random play each)
-- [ ] Longer and scripted play-throughs (bosses, elevators, endings)
+- [x] Object scenarios: Kyle placed beside every kind of object in every level
+- [x] Title menu flows, CONTINUE with the save file, the ending sequence
+- [x] Screens compared with the original's VGA output, sounds and music events
+- [x] Builds on Windows (MSVC) and Linux (GCC, CI); identical traces on both
 - [ ] Remaining open details: palette id 0x48 (colour 0x0707), stray intro glyphs
 
 ## Phase 3: Make it beautiful
