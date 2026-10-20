@@ -18,7 +18,12 @@ adds presentation upgrades on top.
 - [ ] Black backdrop areas
 
 ## Phase 2: Engine core (faithful)
-- [ ] Main loop / tick (`sub_10043`), timing
+- [x] Timing: 30 ticks/s locked to vsync (`FASTER` cheat = 60)
+- [x] Data segment model initialised from BTHORNE.EXE
+- [x] Actor script VM: control flow, 0x3B-0xBF (load/store/arith/branch/bits/probes)
+- [ ] VM opcodes 0x07-0x3A and 0xC0-0xFF (actors, animation, sound, map)
+- [ ] Actor spawning (`sub_1115D`) and the scheduler (`sub_1601A`)
+- [ ] Main loop / tick (`sub_10043`)
 - [ ] Map rendering and scrolling
 - [ ] Kyle: input, animation state machine, physics
 - [ ] Enemies, items, triggers, doors, elevators
