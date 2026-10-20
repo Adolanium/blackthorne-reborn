@@ -19,3 +19,9 @@ No game data is included. You need your own copy of the game.
 ```
 python -I tools/datdump.py "<game dir>/BTHORNE/DATA.DAT" extracted
 ```
+
+## Export sprite sheets
+
+```
+python -I tools/sprites.py extracted out/sprites
+```

@@ -8,7 +8,8 @@ adds presentation upgrades on top.
 ## Phase 1: Formats and asset viewer
 - [x] DATA.DAT container and LZSS
 - [x] Identify music (XMIDI) and sound (VOC)
-- [ ] Sprite bank layout (trace hero blitter)
+- [x] Sprite bank layout and level palettes (`tools/sprites.py`)
+- [ ] Palette base for 4-bit banks; animation scripts and actor part lists
 - [ ] Tiles, level maps, palettes per level
 - [ ] Level descriptor (parsed by `sub_105B4` and helpers)
 - [ ] Asset viewer: browse every sprite, tile and level

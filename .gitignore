@@ -7,3 +7,5 @@ re/*.log
 build/
 __pycache__/
 re/preview/
+re/sheets/
+out/
