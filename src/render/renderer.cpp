@@ -5,11 +5,10 @@
 namespace bt {
 namespace {
 
-constexpr std::uint16_t kShownPalette = 0x4D12;
 
-std::uint32_t colour(const DataSegment& ds, int index) {
+std::uint32_t colour(const std::uint8_t* palette, int index) {
     auto c = [&](int k) {
-        const int v = ds.u8(static_cast<std::uint16_t>(kShownPalette + index * 3 + k)) & 0x3F;
+        const int v = palette[(index & 0xFF) * 3 + k] & 0x3F;
         return static_cast<std::uint32_t>(v * 255 / 63);
     };
     return 0xFF000000u | (c(0) << 16) | (c(1) << 8) | c(2);
@@ -62,14 +61,14 @@ Renderer::Renderer(const Archive& archive) {
     }
 }
 
-void Renderer::render_screen(const Game& game, Image& out, const RenderOptions& opt) const {
+void Renderer::render_screen(const Scene& scene, Image& out, const RenderOptions& opt) const {
     Image play;
-    render(game, play, opt);
+    render(scene, play, opt);
     const int screen_w = kScreenWidth + 2 * opt.extra;
     out.resize(screen_w, kScreenHeight);
-    const bool hud = game.has_hud();
+    const bool hud = (scene.machine->ds.u16(0x1CF6) & 1);
     // Screen shake (sub_10AC1 offsets, applied by the page flip).
-    const DataSegment& ds = game.machine().ds;
+    const DataSegment& ds = (*scene.machine).ds;
     const int shake_x = static_cast<std::int16_t>(ds.u16(0x344)), shake_y = static_cast<std::int16_t>(ds.u16(0x346));
     // Without the HUD the original centres the playfield horizontally but
     // keeps it at the top (the bottom 16 lines stay black).
@@ -83,26 +82,25 @@ void Renderer::render_screen(const Game& game, Image& out, const RenderOptions& 
                 out.pixels[static_cast<std::size_t>(sy) * screen_w + sx] = play.pixels[static_cast<std::size_t>(y) * play.width + x];
         }
     }
-    if (hud) draw_hud(game, out);
+    if (hud) draw_hud(scene, out);
 }
 
 // A HUD stamp: 4-bit pixels ORed with the colour base; 0 is transparent.
-void Renderer::stamp(const Game& game, Image& out, const std::vector<std::uint8_t>& pixels, int size, int x, int y,
+void Renderer::stamp(const Scene& scene, Image& out, const std::vector<std::uint8_t>& pixels, int size, int x, int y,
                      std::uint8_t colour_base) const {
-    const DataSegment& ds = game.machine().ds;
     for (int yy = 0; yy < size; ++yy)
         for (int xx = 0; xx < size; ++xx) {
             const std::uint8_t v = pixels[static_cast<std::size_t>(yy) * size + xx];
             const int sx = x + xx, sy = y + yy;
             if (!v || sx < 0 || sy < 0 || sx >= out.width || sy >= out.height) continue;
-            out.pixels[static_cast<std::size_t>(sy) * out.width + sx] = colour(ds, v | colour_base);
+            out.pixels[static_cast<std::size_t>(sy) * out.width + sx] = colour(scene.palette, v | colour_base);
         }
 }
 
 // The right panel with the 8 inventory slots (sub_1423E), the bottom bar and
 // the selected item name (sub_142D4 / sub_14DE6).
-void Renderer::draw_hud(const Game& game, Image& out) const {
-    const DataSegment& ds = game.machine().ds;
+void Renderer::draw_hud(const Scene& scene, Image& out) const {
+    const DataSegment& ds = (*scene.machine).ds;
     // In widescreen the bar is stretched by repeating a column inside its
     // text box (x 67-190).
     const int stretch = out.width - kScreenWidth;
@@ -111,7 +109,7 @@ void Renderer::draw_hud(const Game& game, Image& out) const {
             for (int x = 0; x < width; ++x) {
                 const int src = width == p.width ? x : x < 128 ? x : x < 128 + stretch ? 128 : x - stretch;
                 out.pixels[static_cast<std::size_t>(y + y0) * out.width + x + x0] =
-                    colour(ds, p.pixels[static_cast<std::size_t>(y) * p.width + src]);
+                    colour(scene.palette, p.pixels[static_cast<std::size_t>(y) * p.width + src]);
             }
     };
     blit(side_panel_, kWidth + stretch, 0, side_panel_.width);
@@ -119,10 +117,10 @@ void Renderer::draw_hud(const Game& game, Image& out) const {
     const int selected = ds.u16(0x1CB0);
     for (int di = 0; di < 0x10; di += 2) {
         const int x = 0x110 + stretch, y = 0xF * di;
-        if (!item_icons_.empty()) stamp(game, out, item_icons_[0], 32, x, y, 0x80);
+        if (!item_icons_.empty()) stamp(scene, out, item_icons_[0], 32, x, y, 0x80);
         const int item = ds.u16(static_cast<std::uint16_t>(0x1CB2 + di));
-        if (item > 0 && item < static_cast<int>(item_icons_.size())) stamp(game, out, item_icons_[item], 32, x, y, 0xF0);
-        if (di == selected) stamp(game, out, selection_frame_, 32, x, y, 0xF0);
+        if (item > 0 && item < static_cast<int>(item_icons_.size())) stamp(scene, out, item_icons_[item], 32, x, y, 0xF0);
+        if (di == selected) stamp(scene, out, selection_frame_, 32, x, y, 0xF0);
     }
     // Item name: 16 characters from the table for the language at ds:579Eh,
     // drawn whole by sub_146BA (sub_14DE6); the space glyphs fill the box. In
@@ -139,14 +137,14 @@ void Renderer::draw_hud(const Game& game, Image& out) const {
         const Glyph& gl = font[g];
         for (int y = 0; y < 8; ++y)
             for (int x = 0; x < 8; ++x)
-                out.pixels[static_cast<std::size_t>(kHeight + 4 + y) * out.width + 64 + c * 8 + x] = colour(ds, gl.pixels[y * 8 + x]);
+                out.pixels[static_cast<std::size_t>(kHeight + 4 + y) * out.width + 64 + c * 8 + x] = colour(scene.palette, gl.pixels[y * 8 + x]);
     }
 }
 
-void Renderer::render(const Game& game, Image& out, const RenderOptions& opt) const {
+void Renderer::render(const Scene& scene, Image& out, const RenderOptions& opt) const {
     const int width = kWidth + 2 * opt.extra;
     out.resize(width, kHeight);
-    const DataSegment& ds = game.machine().ds;
+    const DataSegment& ds = (*scene.machine).ds;
     auto s16 = [&](std::uint16_t a) { return static_cast<int>(static_cast<std::int16_t>(ds.u16(a))); };
     // The view is the game camera widened on both sides, kept inside the map
     // (or centred on a map narrower than the view).
@@ -159,17 +157,17 @@ void Renderer::render(const Game& game, Image& out, const RenderOptions& opt) co
     // priority 3 are in front; within a layer of sprites, lower part numbers
     // are drawn later (on top).
     auto background = [&](int pass) {
-        if (opt.background && game.has_background())
-            draw_layer(game, game.background_offset(), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17), s16(0x1B52) - shift,
+        if (opt.background && scene.has_background)
+            draw_layer(scene, scene.machine->ds.u16(0x25B2), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17), s16(0x1B52) - shift,
                        s16(0x1B54), pass, out);
     };
     auto foreground = [&](int pass) {
         if (opt.foreground)
-            draw_layer(game, game.foreground_offset(), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth),
+            draw_layer(scene, scene.machine->ds.u16(0x25B0), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth),
                        ds.u16(Machine::kMapHeight), view_x, cam_y, pass, out);
     };
     auto sprites = [&](int priority) {
-        if (opt.sprites) draw_parts(game, view_x, cam_y, priority, out);
+        if (opt.sprites) draw_parts(scene, view_x, cam_y, priority, out);
     };
     background(0);
     sprites(0);
@@ -191,23 +189,23 @@ void Renderer::render(const Game& game, Image& out, const RenderOptions& opt) co
         Image tiles;  // the map alone, for text cells in the alternate font
         if (ds.u16(0x1CF6) & 0x100) {
             tiles.resize(width, kHeight);
-            if (opt.background && game.has_background())
+            if (opt.background && scene.has_background)
                 for (int pass : {0, 8})
-                    draw_layer(game, game.background_offset(), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17),
+                    draw_layer(scene, scene.machine->ds.u16(0x25B2), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17),
                                s16(0x1B52) - shift, s16(0x1B54), pass, tiles);
             if (opt.foreground)
                 for (int pass : {0, 8})
-                    draw_layer(game, game.foreground_offset(), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth),
+                    draw_layer(scene, scene.machine->ds.u16(0x25B0), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth),
                                ds.u16(Machine::kMapHeight), view_x, cam_y, pass, tiles);
         }
-        draw_text(game, shift, tiles.width ? &tiles : nullptr, out);
+        draw_text(scene, shift, tiles.width ? &tiles : nullptr, out);
     }
 }
 
 // One map layer (cells: bits 0-9 metatile) over the camera window.
-void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, int row_bytes, int map_w, int map_h, int cam_x,
+void Renderer::draw_layer(const Scene& scene, std::uint16_t layer_offset, int row_bytes, int map_w, int map_h, int cam_x,
                           int cam_y, int pass, Image& out) const {
-    const Machine& m = game.machine();
+    const Machine& m = (*scene.machine);
     const DataSegment& ds = m.ds;
     const std::uint16_t metatiles = ds.u16(Machine::kMetatileTable);
     const int width = out.width;
@@ -234,7 +232,7 @@ void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, int row_
                         const int plane = tx & 3, col = tx >> 2;
                         if (!(mask[plane * 2 + (ty >> 2)] & (0x80 >> ((ty & 3) * 2 + col)))) continue;
                         const int v = px[plane * 16 + ty * 2 + col];
-                        out.pixels[static_cast<std::size_t>(sy) * width + sx] = colour(ds, v >= 16 ? v : v + ref.palette_row() * 16);
+                        out.pixels[static_cast<std::size_t>(sy) * width + sx] = colour(scene.palette, v >= 16 ? v : v + ref.palette_row() * 16);
                     }
                 }
             }
@@ -246,8 +244,8 @@ void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, int row_
 // 0x40 (hidden). Pixel data is rows of [mask][8 pixels]; the pixel bytes form
 // the same Mode X planar square as the sprite banks.
 // sub_159F3: the parts of one priority, from the last part to the first.
-void Renderer::draw_parts(const Game& game, int cam_x, int cam_y, int priority, Image& out) const {
-    const Machine& m = game.machine();
+void Renderer::draw_parts(const Scene& scene, int cam_x, int cam_y, int priority, Image& out) const {
+    const Machine& m = (*scene.machine);
     const DataSegment& ds = m.ds;
     const int width = out.width;
     std::vector<std::uint8_t> raw;
@@ -279,7 +277,7 @@ void Renderer::draw_parts(const Game& game, int cam_x, int cam_y, int priority, 
                 const int plane = scol & 3;
                 const std::uint8_t v = raw[static_cast<std::size_t>((plane * size + srow) * cols + (scol >> 2))];
                 if (!v) continue;
-                out.pixels[static_cast<std::size_t>(sy) * width + sx] = colour(ds, v >= 16 ? v : v | base);  // like tiles: a set high nibble is an absolute colour
+                out.pixels[static_cast<std::size_t>(sy) * width + sx] = colour(scene.palette, v >= 16 ? v : v | base);  // like tiles: a set high nibble is an absolute colour
             }
         }
     }
@@ -291,8 +289,8 @@ void Renderer::draw_parts(const Game& game, int cam_x, int cam_y, int priority, 
 // alternate font (ds:1CF6h bit 0x100, sub_15B2E) the cell is first redrawn
 // from the map tiles alone, covering sprites, and the glyph goes on top
 // where its mask is set.
-void Renderer::draw_text(const Game& game, int x0, const Image* tiles, Image& out) const {
-    const DataSegment& ds = game.machine().ds;
+void Renderer::draw_text(const Scene& scene, int x0, const Image* tiles, Image& out) const {
+    const DataSegment& ds = (*scene.machine).ds;
     const bool alternate = ds.u16(0x1CF6) & 0x100;
     const auto& font = fonts_[alternate ? 1 : 0];
     for (int row = 0; row < 28; ++row) {
@@ -308,11 +306,24 @@ void Renderer::draw_text(const Game& game, int x0, const Image* tiles, Image& ou
                     const int plane = x & 3, data_col = x >> 2;
                     const int byte = plane * 2 + (y >> 2), bit = (y & 3) * 2 + data_col;
                     const bool set = g.mask[byte] & (0x80 >> bit);
-                    if (!alternate || set) out.pixels[at] = colour(ds, g.pixels[y * 8 + x]);
+                    if (!alternate || set) out.pixels[at] = colour(scene.palette, g.pixels[y * 8 + x]);
                     else if (tiles) out.pixels[at] = tiles->pixels[at];
                 }
         }
     }
+}
+
+}  // namespace bt
+
+namespace bt {
+
+Scene live_scene(const Game& game) {
+    const Machine& m = game.machine();
+    return {&m, game.has_background(), m.ds.raw() + 0x4D12};
+}
+
+void Renderer::render_screen(const Game& game, Image& out, const RenderOptions& opt) const {
+    render_screen(game.display(), out, opt);
 }
 
 }  // namespace bt

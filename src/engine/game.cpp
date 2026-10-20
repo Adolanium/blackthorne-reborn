@@ -249,7 +249,8 @@ void Game::load_level_data(int level_id, int x, int y) {
 
     set_camera_bounds();
     place_camera();
-    page_flip();  // sub_10A0C draws the first screen and flips to it
+    draw_page();  // sub_10A0C draws the first screen and flips to it
+    page_flip();
     hud_init();
     music_action(ds.u8(0x1CF2));  // sub_11C64: the entry action
     spawn_start_records();
@@ -628,13 +629,30 @@ void Game::frame() {
     frame_tail();
 }
 
+// sub_128A1: once a fade has turned uploads on (ds:5315h), a pending palette
+// change (ds:4A10h) is copied to the DAC.
+void Game::upload_palette() {
+    DataSegment& ds = machine_->ds;
+    if (!ds.u8(0x5315) || !ds.u16(0x4A10)) return;
+    ds.set_u16(0x4A10, 0);
+    std::copy_n(ds.raw() + 0x4D12, machine_->dac.size(), machine_->dac.begin());
+}
+
+// sub_15BA0 draws the sprites, tiles and text on the page this frame shows.
+void Game::draw_page() {
+    if (!shown_) shown_ = std::make_unique<Machine>();
+    *shown_ = *machine_;
+    shown_has_background_ = has_background_;
+}
+
 // The rest of sub_1008C after the wait.
 void Game::frame_tail() {
     DataSegment& ds = machine_->ds;
-    if (ds.u8(0x5315) && ds.u16(0x4A10)) ds.set_u16(0x4A10, 0);  // sub_128A1 uploads the palette
+    upload_palette();
     cycle_palettes();
     update_shake();
     animate_tiles();
+    draw_page();
     track_redraws();
     // sub_142D4 / sub_1423E: the HUD drawer counts down the per-page redraw
     // bits of the 8 inventory slots and of the item name.
@@ -802,7 +820,7 @@ void Game::fade(bool in) {
         ds.set_u8(0x5315, 1);
         page_flip();
         wait_frame();
-        if (ds.u8(0x5315) && ds.u16(0x4A10)) ds.set_u16(0x4A10, 0);
+        upload_palette();
     }
     for (int k = 0; k < 3; ++k) ds.set_u16(static_cast<std::uint16_t>(0x320 + 2 * k), 0);
     if (!in) ds.set_u8(0x5315, 0);
@@ -946,6 +964,7 @@ void Game::cycle_palettes() {
         }
         ds.set_u16(static_cast<std::uint16_t>(0x1BA8 + si), ds.u16(static_cast<std::uint16_t>(0x1B98 + si)));
     }
+    ds.set_u16(0x4A10, 2);  // the palette goes to the DAC at the next frame (sub_128A1)
 }
 
 // sub_10AC1: screen shake offsets ds:344h (x) and ds:346h (y).

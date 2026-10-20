@@ -21,8 +21,8 @@ IGNORE = [
     (0x5316, 0x5400, 'CRTC and page row tables'),
     (0x5C26, 0x60A6, 'HUD graphics buffers'),
     (0x1172, 0x1192, 'sprite bank handles (EMS handles in the original)'),
-    (0x4A08, 0x4A12, 'page addresses, video mode, palette upload flag'),
-    (0x5312, 0x5316, 'retrace counter'),
+    (0x4A08, 0x4A10, 'page addresses, video mode'),
+    (0x5312, 0x5315, 'retrace counter'),
     (0x6A50, 0x6AC0, 'EMS bookkeeping'),
     (0x7110, 0x10000, 'stack and heap above the initialised data'),
 ]

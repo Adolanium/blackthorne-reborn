@@ -35,6 +35,12 @@ struct RenderOptions {
 // The 432x240 widescreen layout: 56 extra columns per side.
 constexpr int kWideExtra = 56;
 
+// What one frame shows: the machine state the picture is drawn from and the
+// palette it is shown through (6-bit RGB triples). Game::display() is what
+// the original's screen shows; live_scene() is the current state through the
+// shown palette (ds:4D12h), for tools.
+Scene live_scene(const Game& game);
+
 // Draws the game's 256x224 playfield the way the original composes it: map
 // layers from the live map segment, sprite parts from the part pool, the text
 // layer on top, all through the current shown palette (ds:4D12h).
@@ -45,24 +51,25 @@ public:
     explicit Renderer(const Archive& archive);
 
     // The playfield, kWidth + 2 * opt.extra wide.
-    void render(const Game& game, Image& out, const RenderOptions& opt = {}) const;
+    void render(const Scene& scene, Image& out, const RenderOptions& opt = {}) const;
 
     // The whole 320x240 screen: playfield, right inventory panel and bottom
     // bar (for levels with a HUD; other levels show the playfield centred).
     // opt.extra widens it by 2 * extra.
     static constexpr int kScreenWidth = 320, kScreenHeight = 240;
-    void render_screen(const Game& game, Image& out, const RenderOptions& opt = {}) const;
+    void render_screen(const Scene& scene, Image& out, const RenderOptions& opt = {}) const;
+    void render_screen(const Game& game, Image& out, const RenderOptions& opt = {}) const;  // game.display()
 
 private:
     // A map layer: cells at `layer_offset` in the map segment, `row_bytes` per row,
     // `width` x `height` cells, viewed from (cam_x, cam_y).
-    void draw_layer(const Game& game, std::uint16_t layer_offset, int row_bytes, int width, int height, int cam_x, int cam_y,
+    void draw_layer(const Scene& scene, std::uint16_t layer_offset, int row_bytes, int width, int height, int cam_x, int cam_y,
                     int pass, Image& out) const;
-    void draw_parts(const Game& game, int cam_x, int cam_y, int priority, Image& out) const;
-    void draw_text(const Game& game, int x0, const Image* tiles, Image& out) const;
+    void draw_parts(const Scene& scene, int cam_x, int cam_y, int priority, Image& out) const;
+    void draw_text(const Scene& scene, int x0, const Image* tiles, Image& out) const;
 
-    void draw_hud(const Game& game, Image& out) const;
-    void stamp(const Game& game, Image& out, const std::vector<std::uint8_t>& pixels, int size, int x, int y,
+    void draw_hud(const Scene& scene, Image& out) const;
+    void stamp(const Scene& scene, Image& out, const std::vector<std::uint8_t>& pixels, int size, int x, int y,
                std::uint8_t colour_base) const;
 
     struct Panel {

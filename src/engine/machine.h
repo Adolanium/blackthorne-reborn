@@ -21,6 +21,9 @@ struct Machine {
     // language's text table (DATA.DAT entry 1, 2 or 3) loaded over the EXE
     // image. Text reads use 16-bit offsets that can run past the table, into
     // seg002 and then the data segment (at kTextImageSize), as in the original.
+    // The VGA DAC: the palette as last uploaded (sub_127C5), which is what
+    // the screen shows; ds:4D12h can be ahead of it.
+    std::array<std::uint8_t, 768> dac{};
     Bytes text;
     static constexpr std::size_t kTextImageSize = 0x4240;
     std::uint8_t text_u8(std::uint16_t off) const {

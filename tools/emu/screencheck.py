@@ -1,7 +1,7 @@
 """Screen accuracy over every level: the check.py schedule (restart at the
 level through its password, then random play) on both engines, comparing
-what the original displays (btemu.py --shots, VGA model) with our render
-of the frame before (see docs/ACCURACY.md) every few hundred frames.
+what the original displays (btemu.py --shots, VGA model) with what ours
+displays (Game::display()) every few hundred frames.
 
 Usage: python screencheck.py <BTHORNE dir> <bttrace.exe> <work dir>
        [--levels C0,...] [--frames N] [--every N] [--jobs N]
@@ -44,13 +44,13 @@ def one(args, level):
     theirs = os.path.join(args.work, 'sc_orig_%X.bin' % level)
     data = os.path.join(args.game_dir, 'DATA.DAT')
     subprocess.run([args.bttrace, data, str(args.frames), ours, '--input', spec, '--poke', pokes,
-                    '--shots', ','.join(str(f - 1) for f in frames)], check=True, stdout=subprocess.DEVNULL)
+                    '--shots', ','.join(map(str, frames))], check=True, stdout=subprocess.DEVNULL)
     subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'btemu.py'), args.game_dir,
                     str(args.frames), theirs, '--input', spec, '--poke', pokes, '--shots', ','.join(map(str, frames))],
                    check=True, stdout=subprocess.DEVNULL)
     worst = []
     for f in frames:
-        a, b = '%s.%d.png' % (theirs, f), '%s.%d.ppm' % (ours, f - 1)
+        a, b = '%s.%d.png' % (theirs, f), '%s.%d.ppm' % (ours, f)
         if not (os.path.exists(a) and os.path.exists(b)):
             continue
         n = differing(Image.open(a), Image.open(b), os.path.join(args.work, 'sc_%X_%d.png' % (level, f)))

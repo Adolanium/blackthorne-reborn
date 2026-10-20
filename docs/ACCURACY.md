@@ -52,8 +52,15 @@ frames, for example to set the password.
 
 It saves what the original actually displays at those frames.
 `bttrace --shots` renders ours, and `tools/emu/screens.py` compares the two
-pixel by pixel. The original shows at frame t the page it drew after frame
-t-1, so it is compared with our render of t-1.
+pixel by pixel.
+
+Game::display() returns what the original's screen shows:
+- the picture: the page drawn in the last frame routine (after the tile
+  animation), which stays up through fades and waits;
+- the palette: the VGA DAC as last uploaded (sub_128A1), which can lag
+  behind the shown palette at ds:4D12h.
+
+The game draws that, and the comparison uses it frame for frame.
 
 This found:
 - the vertical placement of screens without the HUD;
@@ -61,7 +68,10 @@ This found:
   go in front of sprites below priority 3);
 - glyphs that are opaque with the normal font and masked over the map with
   the caption font;
-- the item name box.
+- the item name box;
+- sprite pixels with their own palette row (blood);
+- the display model above, including the palette upload flag that palette
+  cycling sets every frame.
 
 Known cosmetic difference: the original's bottom bar shares video memory with
 the first rows of a page. Its last line from x=216 picks up stray bytes

@@ -13,6 +13,14 @@
 
 namespace bt {
 
+// A picture to draw: the machine state it is drawn from and the palette (768
+// bytes of 6-bit RGB) it is shown through.
+struct Scene {
+    const Machine* machine;
+    bool has_background;
+    const std::uint8_t* palette;
+};
+
 // A running game: level loading (sub_105B4) and the per-tick main loop
 // (sub_10043) on top of the original memory model and the script VM.
 class Game {
@@ -64,6 +72,14 @@ public:
     void save_state(const std::filesystem::path& path) const;
     void load_state(const std::filesystem::path& path);
 
+    // What the original's screen shows now: the picture it drew last (in the
+    // frame routine, after the tile animation; the page stays put through
+    // fades and waits) seen through the VGA palette as last uploaded.
+    Scene display() const {
+        const Machine* m = shown_ ? shown_.get() : machine_.get();
+        return {m, shown_ ? shown_has_background_ : has_background_, machine_->dac.data()};
+    }
+
     Machine& machine() { return *machine_; }
     const Machine& machine() const { return *machine_; }
     Vm& vm() { return *vm_; }
@@ -113,6 +129,10 @@ private:
     bool stopping_ = false;
     bool saveable_ = false;
     int retraces_ = 2;
+    void draw_page();              // snapshot of what sub_15BA0 draws on the page
+    void upload_palette();         // sub_128A1: the shown palette goes to the DAC
+    std::unique_ptr<Machine> shown_;
+    bool shown_has_background_ = false;
     int nesting_ = 0;              // > 0 inside flips, fades, menus and level changes
     std::exception_ptr error_;
 
