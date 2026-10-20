@@ -64,6 +64,15 @@ private:
     void cycle_palettes();         // sub_186C4
     void update_shake();           // sub_10AC1
     void animate_tiles();          // sub_18822
+    void frame_effects();          // the per-frame half of sub_1008C
+    // The modal yes/no menus (loc_12A12 pause, sub_1290E escape).
+    void open_menu(bool quit_menu);
+    void menu_step();              // sub_12AF5 and the loop exit
+    struct Menu {
+        bool active = false;
+        bool quit_menu = false;
+        bool darkened = false;
+    } menu_;
 
     const Archive& archive_;
     std::unique_ptr<Machine> machine_;

@@ -441,7 +441,32 @@ void Game::tick() {
     d.set_u16(0x35C, pressed);
     d.set_u16(0x35E, static_cast<std::uint16_t>(d.u16(0x35E) | pressed));
     d.set_u16(0x360, now);
+    if (menu_.active) {
+        menu_step();
+        frame_effects();
+        return;
+    }
+    // loc_12A12: P opens the "give up?" menu.
+    if (!(d.u16(0x1CF6) & 0x20) && !(d.u16(0x318) & 3) && (pressed & 0x4000)) {
+        open_menu(false);
+        frame_effects();
+        return;
+    }
     main_loop_actors();
+    // sub_1290E: Esc opens "quit to main menu?" (or leaves special scenes).
+    if ((pressed & 2) && !(d.u16(0x318) & 3)) {
+        if (d.u16(0x1CF6) & 0x20) {
+            if (d.u16(0x1CA4) != 0x6E) {
+                d.set_u16(0x20A, 1);
+                d.set_u16(0x1CA8, 0x6E);
+                d.set_u16(0x318, d.u16(0x318) | 1);
+            }
+        } else {
+            open_menu(true);
+            frame_effects();
+            return;
+        }
+    }
     if (camera_needs_flip()) {  // sub_100B6
         place_camera();
         vm_->mark_offscreen_actors();
@@ -453,11 +478,87 @@ void Game::tick() {
         main_loop_actors();
     }
     hud_tick();  // sub_1411C, sub_14164 close the main loop
-    // The main loop falls through into the frame routine sub_1008C.
+    frame_effects();
+    if (machine_->ds.u16(0x318) & 1) change_level();
+}
+
+// The main loop falls through into the frame routine sub_1008C.
+void Game::frame_effects() {
     cycle_palettes();
     update_shake();
     animate_tiles();
-    if (machine_->ds.u16(0x318) & 1) change_level();
+}
+
+// loc_1296F / loc_12A4C: darken the palette (unless a tint is active), show
+// the question, and start with the second answer selected.
+void Game::open_menu(bool quit_menu) {
+    DataSegment& ds = machine_->ds;
+    menu_ = {true, quit_menu, false};
+    if (!(ds.u16(0x320) | ds.u16(0x322) | ds.u16(0x324))) {
+        for (int k = 0; k < 3; ++k) ds.set_u16(static_cast<std::uint16_t>(0x320 + 2 * k), 4);
+        vm_->retint_range(0, 256);
+        menu_.darkened = true;
+    }
+    const std::uint16_t first = quit_menu ? 0x90 : 0x8D;
+    for (int k = 0; k < 3; ++k) ds.set_u16(static_cast<std::uint16_t>(0x5781 + 10 * k), static_cast<std::uint16_t>(first + k));
+    if (ds.u16(0x380)) vm_->events().push_back({VmEvent::Kind::MidiEffect, ds.u16(0xAC)});
+    ds.set_u16(0x1B46, 0);
+    ds.set_u16(0x370, 0);
+    vm_->show_text_block(0x5780);
+    ds.set_u16(0x5A, 0x5794);
+    ds.set_u16(0x5C, 0x5794);
+    ds.set_u16(0x5E, 0x5780);
+    ds.set_u16(0x60, 0xC);
+}
+
+// sub_12AF5: Left / Right pick an answer, the choice blinks every 12 frames;
+// Enter, Esc or Fire closes the menu.
+void Game::menu_step() {
+    DataSegment& ds = machine_->ds;
+    const std::uint16_t pressed = ds.u16(0x35C);
+    if (pressed & 0x43) {
+        vm_->clear_text();
+        const bool yes = !(pressed & 2) && ds.u16(0x5C) == 0x578A;
+        if (yes && menu_.quit_menu) {
+            ds.set_u16(0x20A, 1);
+            ds.set_u16(0x1CA8, 0x6E);
+            ds.set_u16(0x318, ds.u16(0x318) | 1);
+        } else if (yes) {
+            vm_->apply_password();
+            ds.set_u16(0x318, ds.u16(0x318) | 1);
+            ds.set_u16(0x1CF6, ds.u16(0x1CF6) | 0x10);
+        }
+        if (menu_.darkened) {  // sub_16355
+            for (int k = 0; k < 3; ++k) ds.set_u16(static_cast<std::uint16_t>(0x320 + 2 * k), 0);
+            vm_->retint_range(0, 256);
+        }
+        ds.set_u16(0x360, ds.u16(0x35A));  // sub_10A93
+        ds.set_u16(0x35E, 0);
+        menu_.active = false;
+        return;
+    }
+    bool redraw = false;
+    auto choose = [&](std::uint16_t answer) {
+        if (ds.u16(0x5C) == answer) return;
+        ds.set_u16(0x5A, answer);
+        ds.set_u16(0x5C, answer);
+        ds.set_u16(0x5E, 0x5780);
+        ds.set_u16(0x60, 0xD);
+        vm_->events().push_back({VmEvent::Kind::PlaySound, ds.u16(0x83)});
+        redraw = true;
+    };
+    if (pressed & 0x10) choose(0x578A);
+    else if (pressed & 0x20) choose(0x5794);
+    if (!redraw) {
+        const std::uint16_t t = static_cast<std::uint16_t>(ds.u16(0x60) - 1);
+        ds.set_u16(0x60, t);
+        if (t != 0) return;
+        ds.set_u16(0x60, 0xC);
+        const std::uint16_t a = ds.u16(0x5E);
+        ds.set_u16(0x5E, ds.u16(0x5A));
+        ds.set_u16(0x5A, a);
+    }
+    vm_->show_text_block(ds.u16(0x5E));
 }
 
 // sub_186C4: palette cycles enabled in the mask ds:1B86h. A range rotates one

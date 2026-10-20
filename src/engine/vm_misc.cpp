@@ -216,6 +216,14 @@ Vm::Flow Vm::op_text_at() {
     return Flow::Continue;
 }
 
+void Vm::show_text_block(std::uint16_t addr) {
+    auto w = [&](int o) { return ds_.u16(static_cast<std::uint16_t>(addr + o)); };
+    prepare_text(w(1), w(3));
+    draw_text_box(w(6), w(8));
+    draw_text(w(6), w(8));
+    portrait_update();
+}
+
 // E8: put one character (no change flag, as the original).
 Vm::Flow Vm::op_put_char() {
     const std::uint8_t m1 = fetch8();

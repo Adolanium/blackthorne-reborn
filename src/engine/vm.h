@@ -58,7 +58,7 @@ constexpr std::uint16_t kFacing = 0x40;  // selects add/sub direction and probe 
 
 // Something the VM asks the host to do (sound, saving, quitting).
 struct VmEvent {
-    enum class Kind { PlaySound, StopSound, MusicLoad, MusicStart, MusicRestart, MusicStop, SavePassword, Quit };
+    enum class Kind { PlaySound, StopSound, MidiEffect, MusicLoad, MusicStart, MusicRestart, MusicStop, SavePassword, Quit };
     Kind kind;
     int id;
 };
@@ -87,6 +87,11 @@ public:
     void physics(int slot);                                      // loc_12404
     void schedule_actor(int slot);                               // sub_1603F
     std::uint16_t random() { return rand16(); }                  // sub_10C9F
+    // sub_15F96 run on operand bytes in the data segment (mode, text, style,
+    // mode, col, row), as the pause and quit menus do with ds:5780h.
+    void show_text_block(std::uint16_t addr);
+    void clear_text() { op_clear_text(); }                       // sub_15F4A
+    void apply_password() { op_apply_password(); }               // sub_10B92
     void retint_range(std::uint16_t start, int colours) { retint_palette(start, colours); }  // sub_12671
     bool alloc_frame_buffer(std::uint16_t bank, std::uint16_t& seg, std::uint16_t& off);  // sub_11F9E
     void run_scheduler();                                        // sub_1601A + sub_15FCE

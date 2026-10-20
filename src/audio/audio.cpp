@@ -65,6 +65,7 @@ void Audio::handle(const VmEvent& event, const DataSegment& ds) {
             case VmEvent::Kind::MusicStart: music->start(); return;
             case VmEvent::Kind::MusicRestart: if (ds.u16(0x37E)) music->start(); return;  // F4
             case VmEvent::Kind::MusicStop: music->stop(); return;
+            case VmEvent::Kind::MidiEffect: music->play_effect(event.id); return;
             default: break;
         }
     }
