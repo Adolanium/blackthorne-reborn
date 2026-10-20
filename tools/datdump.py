@@ -1,7 +1,8 @@
 """Unpack Blackthorne DATA.DAT.
 
 Layout (observed): u32 count, u32 offsets[count]; each entry is
-u32 unpacked_size followed by an LZSS stream. Bit 30 of an offset is a flag
+u32 unpacked_size followed by an LZSS stream, or by the raw bytes when the
+stored length is exactly unpacked_size. Bit 30 of an offset is a flag
 whose meaning is still unknown; it is masked off and reported.
 """
 import struct
@@ -58,7 +59,11 @@ def main(dat, outdir):
     bad = 0
     for idx, flag, blob in entries(data):
         size = struct.unpack_from("<I", blob, 0)[0]
-        dec, used = lzss(blob[4:], size)
+        if len(blob) - 4 == size:
+            # Stored raw (e.g. 0-15, 64); the game reads these with sub_102A4.
+            dec, used = blob[4:], size
+        else:
+            dec, used = lzss(blob[4:], size)
         ok = len(dec) == size
         bad += not ok
         k = kind(dec)

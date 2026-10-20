@@ -13,7 +13,9 @@ adds presentation upgrades on top.
 - [x] Tiles, metatiles, level maps, palettes per level
 - [ ] Level descriptor (parsed by `sub_105B4` and helpers)
 - [x] Level and sprite viewer (`btviewer`)
-- [ ] Map flag bits (collision/priority), black backdrop areas
+- [x] Collision codes and object spawn list, shown in the viewer
+- [ ] Actor scripts: initial frame per type so objects render as sprites
+- [ ] Black backdrop areas
 
 ## Phase 2: Engine core (faithful)
 - [ ] Main loop / tick (`sub_10043`), timing

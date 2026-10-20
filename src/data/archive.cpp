@@ -20,7 +20,14 @@ Archive::Archive(const std::filesystem::path& path) {
 Bytes Archive::entry(int index) const {
     const std::uint32_t off = offsets_.at(index);
     const std::uint32_t size = read_u32(data_, off);
-    return lzss_decode(data_.data() + off + 4, data_.size() - off - 4, size);
+    std::uint32_t end = static_cast<std::uint32_t>(data_.size());
+    for (std::uint32_t o : offsets_)
+        if (o > off && o < end) end = o;
+    const std::uint8_t* body = data_.data() + off + 4;
+    // Entries whose stored length equals the unpacked size are raw
+    // (the game reads them with sub_102A4 instead of decompressing).
+    if (end - off - 4 == size) return Bytes(body, body + size);
+    return lzss_decode(body, end - off - 4, size);
 }
 
 // Mirrors sub_10349: zeroed 4 KiB ring, write head at 0, LSB-first flag bits

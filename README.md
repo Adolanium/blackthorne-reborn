@@ -38,8 +38,10 @@ build/Release/btviewer.exe [path/to/DATA.DAT]
 
 Without an argument it looks in the default Blizzard Classics install folder.
 Arrows/WASD or mouse drag to scroll, wheel to zoom, PgUp/PgDn to change level,
-B/F to toggle background/foreground, Tab for the sprite browser (Left/Right
-to change bank). `--level N --sprites --bank N --shot out.bmp` renders one
+B/F to toggle background/foreground, C for the collision overlay, O for
+object spawns, Tab for the sprite browser (Left/Right
+to change bank). `--level N --zoom N --x PX --y PX --collision --objects --sprites --bank N
+--shot out.bmp` renders one
 frame to a file.
 
 ## Python tools

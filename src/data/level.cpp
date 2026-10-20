@@ -60,7 +60,10 @@ Level load_level(const Archive& archive, int descriptor_entry) {
 
     // Walk the descriptor body in the order of sub_105B4's helpers.
     std::size_t o = 0x36;
-    while (read_u16(d, o) != kEnd) o += 14;                       // sub_1074E
+    for (; read_u16(d, o) != kEnd; o += 14) {                     // sub_1074E
+        lv.objects.push_back({read_u16(d, o), read_u16(d, o + 2), read_u16(d, o + 4), read_u16(d, o + 6),
+                              read_u16(d, o + 8), read_u16(d, o + 10), read_u16(d, o + 12)});
+    }
     o += 2;
     while (read_u16(d, o) != kEnd) {                              // sub_10760
         const Bytes res = archive.resource(read_u16(d, o));
@@ -99,7 +102,7 @@ std::vector<int> render_level(const Level& level, bool background, bool foregrou
     auto paint = [&](const MapLayer& layer) {
         for (int my = 0; my < layer.height; ++my)
             for (int mx = 0; mx < layer.width; ++mx) {
-                const int mi = layer.at(mx, my) & 0xFFF;
+                const int mi = layer.metatile(mx, my);
                 if (mi >= static_cast<int>(level.metatiles.size())) continue;
                 for (int k = 0; k < 4; ++k) {
                     const TileRef ref = level.metatiles[mi][k];
@@ -111,7 +114,7 @@ std::vector<int> render_level(const Level& level, bool background, bool foregrou
                             const int sx = ref.flip_x() ? 7 - x : x;
                             const int sy = ref.flip_y() ? 7 - y : y;
                             const int v = t[sy * 8 + sx];
-                            if (v) out[static_cast<std::size_t>(oy + y) * w + ox + x] = v + ref.palette_row() * 16;
+                            if (v) out[static_cast<std::size_t>(oy + y) * w + ox + x] = v >= 16 ? v : v + ref.palette_row() * 16;
                         }
                 }
             }

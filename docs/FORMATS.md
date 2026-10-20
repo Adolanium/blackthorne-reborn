@@ -96,10 +96,71 @@ Body:
   16x16 pixels.
 - Tile word: bits 6-15 tile index, bits 4-5 select one of four blitters
   (x/y flip), bit 3 **open**, bits 0-2 palette row (colour = pixel + row*16).
-- Map layer: `width*height` u16 cells, row-major. Low 12 bits = metatile.
-  The foreground layer carries flags in bits 12-15 (seen: 0x1000, 0x2000,
-  0x8000; meaning **open**, likely collision/priority). Background is drawn
-  first, foreground on top.
+- Map layer: `width*height` u16 cells, row-major. Bits 0-9 = metatile,
+  bits 10-15 = collision code (`sub_18992`: `(cell & 0xFC00) >> 10`;
+  `sub_189A5` returns 0x400, code 1, outside the map). Background is drawn
+  first, foreground on top. Only the foreground carries collision.
+- Tile pixels with a non-zero high nibble are absolute colours; only values
+  1-15 get the palette row added (`loc_189EA`).
+
+### Collision codes (confirmed values; names provisional)
+
+| Code | Cells (all levels) | Meaning (from placement in the maps) |
+|---|---|---|
+| 1 | 16337 | solid |
+| 3 | 331 | ladder |
+| 4 | 77 | ladder top (always directly above a 3 column) |
+| 5 | 17 | floor cell beside an elevator shaft |
+| 6 | 125 | **open** (vertical strips) |
+| 7 | 394 | ledge, left end (grab point) |
+| 8 | 387 | ledge, right end (grab point) |
+| 16 | 17 | water floor (bottom of waterfall basins) |
+| 32 | 140 | elevator stop, cell above the platform |
+| 33 | 156 | elevator stop, floor cell over the shaft |
+
+Movement code tests codes against sets stored at `ds:60CCh` (byte lists
+terminated by 0xFF), for example `{1,2}`, `{1,2,4,5,7,8,10,11,12}`,
+`{3,4}`, `{7,8}`, `{0x20}`, `{0x21}`, `{0x2E}`, `{0x2F,0x30}`. Which set each
+check uses is traced when the movement code is ported.
+
+## Object spawns (confirmed, `sub_11380`, `sub_11458`)
+
+Descriptor offset 0x36: 14-byte records until `FFFF`:
+
+| Offset | Field |
+|---|---|
+| 0 | x (pixels, actor centre) |
+| 2 | y |
+| 4, 6 | activation half extents rx, ry |
+| 8 | actor type (index into the actor table) |
+| 10 | flags: 0x800 = spawn at level start; others **open** |
+| 12 | parameter (e.g. per-prisoner id 0x7E, 0x80, ...) |
+
+An object spawns when the camera rectangle overlaps `x +- rx, y +- ry`
+(`sub_11380`), through `sub_1115D`.
+
+## Actor table (confirmed layout, `loc_117B7`)
+
+DATA.DAT entry 64 (resource 0x41) is stored raw. It starts with 0x56
+16-byte actor types, followed by actor scripts:
+
+| Offset | Field |
+|---|---|
+| 0 | sprite bank: 0xFFFE = level bank, 0xFFFF = none, else resource id |
+| 2 | bits 0-5 part count, bits 6-7 flags |
+| 3 | script offset within entry 64 (stored +3 as the script pointer) |
+| 5 | script page (0x82/0x83) |
+| 7, 8, 9 | box kind, box width, box height |
+| 10 | frame size: low byte width/8, high byte height/8 (0x0604 = 32x48) |
+| 12, 14 | **open** |
+
+Types seen in the maps (provisional): 0x11 Kyle start, 0x0D/0x0E orc
+guards, 0x47-0x4B chained prisoners, 0x08 elevator, 0x0A exit door.
+
+## Raw entries
+
+Entries 0-15 and 64 are stored uncompressed: their stored length equals the
+size field. The game reads those with `sub_102A4` instead of decompressing.
 - Black areas remain in some maps; whether the game draws a backdrop there is
   **open**.
 

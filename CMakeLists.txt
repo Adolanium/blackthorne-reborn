@@ -15,6 +15,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(SDL3)
 
 add_library(btdata STATIC
+    src/data/actors.cpp
     src/data/archive.cpp
     src/data/level.cpp
     src/data/sprites.cpp

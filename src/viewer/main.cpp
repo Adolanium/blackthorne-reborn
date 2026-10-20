@@ -7,11 +7,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <string>
 
+#include "data/actors.h"
 #include "data/archive.h"
 #include "data/level.h"
 #include "data/sprites.h"
@@ -51,6 +53,8 @@ public:
                 case SDLK_B: show_bg_ = !show_bg_; rebuild_map(); break;
                 case SDLK_F: show_fg_ = !show_fg_; rebuild_map(); break;
                 case SDLK_TAB: sprite_mode_ = !sprite_mode_; break;
+                case SDLK_C: show_collision_ = !show_collision_; break;
+                case SDLK_O: show_objects_ = !show_objects_; break;
                 case SDLK_RIGHT: if (sprite_mode_) select_bank(bank_ + 1); break;
                 case SDLK_LEFT: if (sprite_mode_) select_bank(bank_ - 1); break;
                 default: break;
@@ -74,10 +78,15 @@ public:
         anim_time_ += dt;
     }
 
-    void open(int level, bool sprites, int bank) {
+    void open(int level, bool sprites, int bank, bool collision, bool objects, float x, float y, int zoom) {
+        zoom_ = zoom;
         load(level);
         sprite_mode_ = sprites;
         select_bank(bank);
+        show_collision_ = collision;
+        show_objects_ = objects;
+        cam_x_ = x;
+        cam_y_ = y;
     }
 
     void draw(bool present = true) {
@@ -142,6 +151,77 @@ private:
         const SDL_FRect src{cam_x_, cam_y_, std::min(view_w, static_cast<float>(map_w_)), std::min(view_h, static_cast<float>(map_h_))};
         const SDL_FRect dst{0, 0, src.w * zoom_, src.h * zoom_};
         SDL_RenderTexture(renderer_, map_.get(), &src, &dst);
+        if (show_collision_) draw_collision();
+        if (show_objects_) draw_objects();
+    }
+
+    // Screen rectangle for a map-space rectangle.
+    SDL_FRect to_screen(float x, float y, float w, float h) const {
+        return {(x - cam_x_) * zoom_, (y - cam_y_) * zoom_, w * zoom_, h * zoom_};
+    }
+
+    // Collision codes (map cell bits 10-15). Names are provisional until the
+    // movement code that tests them (lists at ds:60CCh) is ported.
+    static SDL_Color collision_colour(int code) {
+        switch (code) {
+            case 1: return {255, 60, 60, 110};    // solid
+            case 3: return {255, 160, 0, 140};    // ladder
+            case 4: return {255, 255, 0, 140};    // ladder top
+            case 5: return {0, 255, 255, 160};    // beside an elevator shaft
+            case 6: return {160, 80, 255, 160};   // unknown, vertical strips
+            case 7: return {0, 255, 0, 170};      // ledge, left end
+            case 8: return {0, 160, 255, 170};    // ledge, right end
+            case 16: return {255, 0, 255, 170};   // water floor
+            case 32: return {255, 255, 255, 140}; // elevator stop, standing cell
+            case 33: return {120, 255, 160, 140}; // elevator stop, floor over shaft
+            default: return {128, 128, 128, 160};
+        }
+    }
+
+    void draw_collision() {
+        const bt::MapLayer& l = level_.foreground;
+        for (int y = 0; y < l.height; ++y)
+            for (int x = 0; x < l.width; ++x) {
+                const int code = l.collision(x, y);
+                if (!code) continue;
+                const SDL_Color c = collision_colour(code);
+                SDL_SetRenderDrawColor(renderer_, c.r, c.g, c.b, c.a);
+                const SDL_FRect r = to_screen(x * 16.0f, y * 16.0f, 16, 16);
+                SDL_RenderFillRect(renderer_, &r);
+                if (code != 1 && zoom_ >= 2) {
+                    char label[8];
+                    std::snprintf(label, sizeof label, "%d", code);
+                    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
+                    SDL_RenderDebugText(renderer_, r.x + 2, r.y + 2, label);
+                }
+            }
+    }
+
+    void draw_objects() {
+        for (const bt::ObjectSpawn& o : level_.objects) {
+            const bool at_start = o.flags & 0x800;
+            SDL_SetRenderDrawColor(renderer_, at_start ? 255 : 255, at_start ? 80 : 220, at_start ? 80 : 0, 255);
+            const SDL_FRect box = to_screen(static_cast<float>(o.x - o.rx), static_cast<float>(o.y - o.ry),
+                                            static_cast<float>(o.rx * 2), static_cast<float>(o.ry * 2));
+            SDL_RenderRect(renderer_, &box);
+            const SDL_FRect dot = to_screen(o.x - 1.5f, o.y - 1.5f, 3, 3);
+            SDL_RenderFillRect(renderer_, &dot);
+            char label[48];
+            const bt::ActorType& t = actor_types_[o.type < bt::kActorTypeCount ? o.type : 0];
+            std::snprintf(label, sizeof label, "%02X p%X", o.type, o.param);
+            SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 200);
+            const SDL_FRect bg{dot.x + 4, dot.y - 10, 8.0f * static_cast<float>(std::strlen(label)) + 2, 10};
+            SDL_RenderFillRect(renderer_, &bg);
+            SDL_SetRenderDrawColor(renderer_, 255, 255, 255, 255);
+            SDL_RenderDebugText(renderer_, dot.x + 5, dot.y - 9, label);
+            if (t.box_w && t.box_w < 128 && t.box_h < 128) {
+                // Actor bounding box, centred on the spawn point.
+                SDL_SetRenderDrawColor(renderer_, 255, 255, 255, 90);
+                const SDL_FRect fr = to_screen(o.x - t.box_w / 2.0f, o.y - t.box_h / 2.0f,
+                                               static_cast<float>(t.box_w), static_cast<float>(t.box_h));
+                SDL_RenderRect(renderer_, &fr);
+            }
+        }
     }
 
     void draw_sprites(int ww) {
@@ -157,8 +237,9 @@ private:
             std::snprintf(line, sizeof line, "Level %d  sprite bank %d/%zu  entry %d  %dx%d  %d frames   [<-/->] bank  [Tab] map",
                           level_index_ + 1, bank_ + 1, level_.sprite_banks.size(), b.entry, b.width, b.height, frame_count_);
         } else {
-            std::snprintf(line, sizeof line, "Level %d/18 (entry %d)  %dx%d px  zoom %dx  [PgUp/PgDn] level  [B]g %s  [F]g %s  [Tab] sprites",
-                          level_index_ + 1, level_.descriptor_entry, map_w_, map_h_, zoom_, show_bg_ ? "on" : "off", show_fg_ ? "on" : "off");
+            std::snprintf(line, sizeof line, "Level %d/18 (entry %d)  %dx%d px  zoom %dx  [PgUp/PgDn] level  [B]g %s [F]g %s [C]ollision [O]bjects (%zu)  [Tab] sprites",
+                          level_index_ + 1, level_.descriptor_entry, map_w_, map_h_, zoom_, show_bg_ ? "on" : "off", show_fg_ ? "on" : "off",
+                          level_.objects.size());
         }
         SDL_SetRenderScale(renderer_, 2, 2);
         SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 180);
@@ -171,6 +252,7 @@ private:
 
     SDL_Renderer* renderer_;
     const bt::Archive& archive_;
+    std::vector<bt::ActorType> actor_types_ = bt::load_actor_types(archive_);
     bt::Level level_;
     int level_index_ = 0;
     Texture map_, sheet_;
@@ -179,21 +261,30 @@ private:
     int zoom_ = 3;
     float cam_x_ = 0, cam_y_ = 0, anim_time_ = 0;
     bool show_bg_ = true, show_fg_ = true, sprite_mode_ = false;
+    bool show_collision_ = false, show_objects_ = false;
 };
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    // btviewer [DATA.DAT] [--level N] [--sprites] [--bank N] [--shot out.bmp]
+    // btviewer [DATA.DAT] [--level N] [--sprites] [--bank N] [--collision] [--objects]
+    //          [--zoom N] [--x PX --y PX] [--shot out.bmp]
     std::filesystem::path data_path = kDefaultData;
     std::string shot;
     int start_level = 0, start_bank = 0;
-    bool start_sprites = false;
+    bool start_sprites = false, start_collision = false, start_objects = false;
+    float start_x = 0, start_y = 0;
+    int start_zoom = 3;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--level" && i + 1 < argc) start_level = std::clamp(std::atoi(argv[++i]) - 1, 0, 17);
         else if (a == "--bank" && i + 1 < argc) start_bank = std::atoi(argv[++i]) - 1;
         else if (a == "--sprites") start_sprites = true;
+        else if (a == "--collision") start_collision = true;
+        else if (a == "--objects") start_objects = true;
+        else if (a == "--zoom" && i + 1 < argc) start_zoom = std::clamp(std::atoi(argv[++i]), 1, 8);
+        else if (a == "--x" && i + 1 < argc) start_x = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--y" && i + 1 < argc) start_y = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--shot" && i + 1 < argc) shot = argv[++i];
         else data_path = a;
     }
@@ -216,7 +307,7 @@ int main(int argc, char** argv) {
 
     {
         Viewer viewer(renderer, *archive);
-        viewer.open(start_level, start_sprites, start_bank);
+        viewer.open(start_level, start_sprites, start_bank, start_collision, start_objects, start_x, start_y, start_zoom);
         if (!shot.empty()) {
             // Render one frame to a file instead of running interactively.
             viewer.draw(false);

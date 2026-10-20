@@ -13,7 +13,8 @@ struct Rgb {
 };
 using Palette = std::array<Rgb, 256>;
 
-// 8x8 tile, one byte per pixel (0 = transparent), 4-bit values.
+// 8x8 tile, one byte per pixel (0 = transparent). Values 1-15 are offset by
+// the tile word's palette row; values >= 16 are absolute colours (sub_1438A).
 using Tile = std::array<std::uint8_t, 64>;
 
 // Tile reference word (sub_1438A): bits 6-15 tile, 4-5 flip, 3 unknown, 0-2 palette row.
@@ -28,10 +29,24 @@ struct TileRef {
 // 16x16 block of four tiles: top-left, top-right, bottom-left, bottom-right.
 using Metatile = std::array<TileRef, 4>;
 
+// Map cell (sub_189A5): bits 0-9 metatile, bits 10-15 collision code.
 struct MapLayer {
     int width = 0, height = 0;          // in metatiles
-    std::vector<std::uint16_t> cells;   // low 12 bits: metatile, high bits: flags
+    std::vector<std::uint16_t> cells;
     std::uint16_t at(int x, int y) const { return cells[y * width + x]; }
+    int metatile(int x, int y) const { return at(x, y) & 0x3FF; }
+    int collision(int x, int y) const { return at(x, y) >> 10; }
+};
+
+// Object spawn record (14 bytes at descriptor 0x36, read by sub_11380 and
+// sub_11458). Spawns when the camera rectangle overlaps x +- rx, y +- ry;
+// flag 0x800 spawns at level start.
+struct ObjectSpawn {
+    int x, y;           // pixels
+    int rx, ry;         // activation half extents
+    int type;           // actor type, index into the actor table (entry 64)
+    int flags;
+    int param;
 };
 
 struct SpriteBankRef {
@@ -49,6 +64,7 @@ struct Level {
     MapLayer foreground;   // header 0x1C/0x1E/0x21; carries flag bits
     MapLayer background;   // header 0x27/0x29/0x2C
     std::vector<SpriteBankRef> sprite_banks;
+    std::vector<ObjectSpawn> objects;
 };
 
 // The 18 levels in play order (descriptor DATA.DAT entries).
