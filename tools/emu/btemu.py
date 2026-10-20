@@ -385,6 +385,8 @@ def main():
     ap.add_argument('--savegame', default='', help='4-character password to put in savegame.000')
     ap.add_argument('--budget', type=int, default=20_000_000, help='instructions allowed per tick')
     ap.add_argument('--shots', default='', help='frames to save as <out>.<frame>.png (emulates the VGA; slower)')
+    ap.add_argument('--sounds', default='', help='write "frame id" for every sound request (sub_11D2E), and '
+                    '"frame start" / "frame stop" for the music (sub_197B4, sub_19566), to this file')
     args = ap.parse_args()
     schedule = parse_input(args.input)
     pokes = parse_pokes(args.poke)
@@ -424,6 +426,18 @@ def main():
             uc.emu_stop()
 
     m.uc.hook_add(UC_HOOK_CODE, on_wait, None, FRAME_WAIT, FRAME_WAIT)
+    sounds = open(args.sounds, 'w') if args.sounds else None
+    if sounds:
+        def on_sound(uc, address, size, _):  # sub_11D2E: AX = sound id
+            sounds.write('%d %02X%s' % (state['tick'] + 1, uc.reg_read(UC_X86_REG_AX) & 0xFF, chr(10)))
+        m.uc.hook_add(UC_HOOK_CODE, on_sound, None, 0x11D2E, 0x11D2E)
+
+        def on_music(what):
+            def hook(uc, address, size, _):
+                sounds.write('%d %s%s' % (state['tick'] + 1, what, chr(10)))
+            return hook
+        m.uc.hook_add(UC_HOOK_CODE, on_music('start'), None, 0x197B4, 0x197B4)
+        m.uc.hook_add(UC_HOOK_CODE, on_music('stop'), None, 0x19566, 0x19566)
     pc = m.entry
     while state['tick'] < args.ticks and m.exited is None:
         before = state['tick']
@@ -443,6 +457,8 @@ def main():
     out.close()
     if map_out:
         map_out.close()
+    if sounds:
+        sounds.close()  # the hook keeps a reference: close it to flush
     for line in m.log[-40:]:
         print(line)
     print('ticks recorded: %d%s' % (state['tick'], '' if m.exited is None else ', exited with %d' % m.exited))

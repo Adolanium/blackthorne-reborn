@@ -76,9 +76,11 @@ int main(int argc, char** argv) {
     bool with_map = false;
     std::string savegame;
     std::vector<int> shots;  // frames to render to <out.bin>.<frame>.ppm
+    std::string sounds_path;  // "frame id" per sound request, like btemu.py --sounds
     for (int i = 4; i < argc; ++i) {
         if (std::string(argv[i]) == "--map") with_map = true;
         if (std::string(argv[i]) == "--savegame" && i + 1 < argc) savegame = argv[i + 1];
+        if (std::string(argv[i]) == "--sounds" && i + 1 < argc) sounds_path = argv[i + 1];
         if (std::string(argv[i]) == "--shots" && i + 1 < argc)
             for (const char* p = argv[i + 1]; *p;) {
                 char* end = nullptr;
@@ -101,6 +103,8 @@ int main(int argc, char** argv) {
         };
     game.boot();
     std::ofstream out(argv[3], std::ios::binary);
+    std::ofstream sounds;
+    if (!sounds_path.empty()) sounds.open(sounds_path);
     std::ofstream map_out;
     if (with_map) map_out.open(std::string(argv[3]) + ".map", std::ios::binary);
     for (int t = 1; t <= ticks; ++t) {
@@ -117,7 +121,17 @@ int main(int argc, char** argv) {
             return 2;
         }
         bool quit = false;
-        for (const bt::VmEvent& ev : game.vm().events()) quit |= ev.kind == bt::VmEvent::Kind::Quit;
+        for (const bt::VmEvent& ev : game.vm().events()) {
+            quit |= ev.kind == bt::VmEvent::Kind::Quit;
+            if (!sounds.is_open()) continue;
+            if (ev.kind == bt::VmEvent::Kind::PlaySound) {
+                char line[16];
+                std::snprintf(line, sizeof line, "%d %02X", t, ev.id & 0xFF);
+                sounds << line << char(10);
+            }
+            if (ev.kind == bt::VmEvent::Kind::MusicStart) sounds << t << " start" << char(10);
+            if (ev.kind == bt::VmEvent::Kind::MusicStop) sounds << t << " stop" << char(10);
+        }
         game.vm().events().clear();
         if (quit) {  // like the original exiting to DOS: this frame is not recorded
             std::printf("ticks recorded: %d, quit\n", t - 1);
