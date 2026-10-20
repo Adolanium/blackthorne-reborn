@@ -1,12 +1,7 @@
 # Original game data and derived dumps are Blizzard property: never commit
 extracted/
-re/BTHORNE.EXE
-re/*.i64
-re/*.asm
-re/*.log
 build/
 __pycache__/
-re/preview/
-re/sheets/
 out/
-re/shots/
+# Local reverse-engineering workspace (game binary, disassembly, dumps): never commit
+re/

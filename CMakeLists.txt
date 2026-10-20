@@ -29,3 +29,8 @@ if(MSVC)
     target_compile_options(btdata PRIVATE /W4 /permissive-)
     target_compile_options(btviewer PRIVATE /W4 /permissive-)
 endif()
+
+enable_testing()
+add_executable(bttests tests/data_tests.cpp)
+target_link_libraries(bttests PRIVATE btdata)
+add_test(NAME data COMMAND bttests)

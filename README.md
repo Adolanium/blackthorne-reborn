@@ -31,6 +31,14 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
+## Tests
+
+```
+cd build && ctest -C Release --output-on-failure
+```
+
+The tests read the original DATA.DAT and are skipped if it is not installed.
+
 ## Level viewer
 
 ```
