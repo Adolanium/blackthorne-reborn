@@ -80,10 +80,10 @@ Vm::Flow Vm::op_music() {
 
 // sub_15C57 + sub_15C82: look up text record `text` and apply the box style.
 void Vm::prepare_text(std::uint16_t text, std::uint16_t style) {
-    const Bytes& t = m_.text;
-    const std::size_t ptr = static_cast<std::size_t>(t.at(text * 2u) | (t.at(text * 2u + 1) << 8));
-    ds_.set_u16(g::kTextW, t.at(ptr));
-    ds_.set_u16(g::kTextH, t.at(ptr + 1));
+    auto t = [&](unsigned off) { return m_.text_u8(static_cast<std::uint16_t>(off)); };  // 16-bit, wraps like si
+    const std::uint16_t ptr = static_cast<std::uint16_t>(t(text * 2u) | (t(text * 2u + 1) << 8));
+    ds_.set_u16(g::kTextW, t(ptr));
+    ds_.set_u16(g::kTextH, t(ptr + 1u));
     ds_.set_u16(g::kTextPtr, static_cast<std::uint16_t>(ptr + 2));
     ds_.set_u16(g::kTextStyle, style);
     auto add = [&](std::uint16_t a, int v) { ds_.set_u16(a, static_cast<std::uint16_t>(ds_.u16(a) + v)); };
@@ -141,13 +141,12 @@ void Vm::draw_text(int col, int row) {
     ds_.set_u16(g::kPortraitX, static_cast<std::uint16_t>(((style & 0x4000) ? col + 1 : col + ds_.u16(g::kTextW) - 5) * 8));
     const int r0 = row - 1 + ds_.u16(g::kTextY);
     std::uint16_t line = static_cast<std::uint16_t>(g::kTextLayer + (r0 * 32 + col + ds_.u16(g::kTextX)) * 2);
-    std::size_t p = ds_.u16(g::kTextPtr);
-    const Bytes& t = m_.text;
+    std::uint16_t p = ds_.u16(g::kTextPtr);
     for (;;) {
         line = static_cast<std::uint16_t>(line + 0x40);
         std::uint16_t d = line;
         for (;;) {
-            const std::uint8_t c = t.at(p++);
+            const std::uint8_t c = m_.text_u8(p++);
             if (c == 0) return;
             if (c == 0x0D) break;
             ds_.set_u16(d, static_cast<std::uint16_t>(c - 0x20));

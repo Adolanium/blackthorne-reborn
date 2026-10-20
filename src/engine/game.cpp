@@ -23,7 +23,16 @@ Game::Game(const Archive& archive, const std::filesystem::path& exe_path, int la
     : archive_(archive), machine_(std::make_unique<Machine>()) {
     machine_->ds = DataSegment(exe_path);
     machine_->scripts = archive.entry(64);
-    machine_->text = archive.entry(1 + std::clamp(language, 0, 2));
+    // seg001 + seg002 from the EXE image (file offset 0xA500), with the text
+    // resource loaded at the start of seg001 (sub_10A6B).
+    {
+        std::ifstream exe(exe_path, std::ios::binary);
+        machine_->text.assign(Machine::kTextImageSize, 0);
+        exe.seekg(0xA500);
+        exe.read(reinterpret_cast<char*>(machine_->text.data()), static_cast<std::streamsize>(Machine::kTextImageSize));
+        const Bytes table = archive.entry(1 + std::clamp(language, 0, 2));
+        std::copy_n(table.begin(), std::min(table.size(), machine_->text.size()), machine_->text.begin());
+    }
     // sub_19046 (startup): unpack the sprite palettes listed at ds:6A78h, in
     // order, into the table at ds:6ABCh that palette slots copy from.
     DataSegment& ds = machine_->ds;

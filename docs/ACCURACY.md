@@ -27,6 +27,12 @@ frame.
   same frame waits, so the frames line up one to one.
 - **`tools/emu/compare.py`** names the words that differ. It also groups
   them into words that change during play and words that are constant.
+- **`tools/emu/scenarios.py`** goes after the objects themselves. For each
+  level and each actor type in it, it moves Kyle beside one of its spawn
+  records (the same pokes go to both engines). It then plays a scripted mix
+  of drawing the gun, facing and firing, jumping, climbing and walking into
+  the object, so enemies, bosses, elevators and pickups get exercised. It
+  runs several scenarios in parallel.
 - **`tools/emu/check.py`** does a full run per level:
   1. Start a new game.
   2. Restart at the level through its password via the give-up menu
@@ -76,6 +82,13 @@ Since then it has caught:
 - The redraw counters, which decide when a freed sprite part can be reused,
   were not kept.
 - Several smaller ordering details (see the git log).
+
+Known difference: on the special level 15Eh a script asks for text A1h,
+beyond the end of the English text table. The original then reads its width
+from heap memory above the EXE image, at offset FFFFh of the text segment.
+Ours models the text segment, seg002 and the data segment behind it, but not
+the DOS heap, so the portrait position word ds:36Ch differs there. Nothing
+else changes. Before this was modelled, that read crashed our engine.
 
 Current result: on all 21 levels in the password table, 4,000 frames each
 of random play (movement, jumping, running, shooting, items, and the level

@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <stdexcept>
+#include <string>
 
 namespace bt {
 namespace {
@@ -225,9 +226,18 @@ void Vm::run_actor(int slot) {
 
 void Vm::execute() {
     for (;;) {
+        const std::uint16_t at = ip_;
         last_op_ = fetch8();
         ++steps_;
-        if ((this->*table_[last_op_])() == Flow::EndTurn) return;
+        try {
+            if ((this->*table_[last_op_])() == Flow::EndTurn) return;
+        } catch (const std::out_of_range& e) {
+            // Say which script went out of bounds (nested runs add their own line).
+            char where[96];
+            std::snprintf(where, sizeof where, "opcode 0x%02X at %04X:%04X, slot %d: ", last_op_, seg_, at,
+                          ds_.u16(ds_addr::kCurrentSlot) / 2);
+            throw std::out_of_range(where + std::string(e.what()));
+        }
     }
 }
 

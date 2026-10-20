@@ -7,6 +7,7 @@
 // writes the word for the next tick at each frame boundary.
 
 #include <cstdio>
+#include <exception>
 #include <cstdlib>
 #include <fstream>
 #include <string>
@@ -88,7 +89,12 @@ int main(int argc, char** argv) {
         game.set_input(bits);
         for (const Poke& p : pokes)
             if (p.frame == t - 1) game.machine().ds.set_u16(static_cast<std::uint16_t>(p.addr), static_cast<std::uint16_t>(p.value));
-        game.tick();
+        try {
+            game.tick();
+        } catch (const std::exception& e) {
+            std::printf("engine error at tick %d (level %02X): %s\n", t, game.level_id(), e.what());
+            return 2;
+        }
         game.vm().events().clear();
         out.write(reinterpret_cast<const char*>(game.machine().ds.raw()), bt::DataSegment::kSize);
         if (with_map) map_out.write(reinterpret_cast<const char*>(game.machine().map.data()), static_cast<std::streamsize>(game.machine().map.size()));

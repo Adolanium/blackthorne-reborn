@@ -17,7 +17,15 @@ struct Machine {
     DataSegment ds;
     std::array<std::uint8_t, 0x10000> map{};
     Bytes scripts;
-    Bytes text;  // seg001: the language's text table (DATA.DAT entry 1, 2 or 3)
+    // seg001 and seg002 as they sit in memory below the data segment: the
+    // language's text table (DATA.DAT entry 1, 2 or 3) loaded over the EXE
+    // image. Text reads use 16-bit offsets that can run past the table, into
+    // seg002 and then the data segment (at kTextImageSize), as in the original.
+    Bytes text;
+    static constexpr std::size_t kTextImageSize = 0x4240;
+    std::uint8_t text_u8(std::uint16_t off) const {
+        return off < kTextImageSize ? text[off] : ds.u8(static_cast<std::uint16_t>(off - kTextImageSize));
+    }
 
     // Sprite memory. Segment numbers stored in the data segment are these
     // symbolic values; sprite_data() maps them back to buffers.
