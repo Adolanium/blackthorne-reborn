@@ -135,6 +135,28 @@ def feather(w, h, rect, layer_w, layer_h, overlap):
     return col, row
 
 
+def defringe(rgb, passes=12):
+    """Models blend edges into the magenta key. Pixels with a magenta cast
+    are refilled from their clean neighbours, growing inwards."""
+    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
+    bad = (r - g > 50) & (b - g > 50) & (np.abs(r - b) < 90)
+    out = rgb.copy()
+    for _ in range(passes):
+        if not bad.any():
+            break
+        total = np.zeros_like(out)
+        count = np.zeros(bad.shape)
+        good = ~bad
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)):
+            shifted_good = np.roll(np.roll(good, dy, 0), dx, 1)
+            total += np.roll(np.roll(out, dy, 0), dx, 1) * shifted_good[:, :, None]
+            count += shifted_good
+        fill = bad & (count > 0)
+        out[fill] = total[fill] / count[fill][:, None]
+        bad &= ~fill
+    return out
+
+
 def cmd_stitch(args):
     write_pack_json(args.pack)
     done = 0
@@ -159,7 +181,7 @@ def cmd_stitch(args):
                     continue
                 repainted += 1
                 tw, th = t["w"] * SCALE, t["h"] * SCALE
-                tile = np.asarray(Image.open(path).convert("RGB").resize((tw, th), Image.LANCZOS), dtype=np.float64)
+                tile = defringe(np.asarray(Image.open(path).convert("RGB").resize((tw, th), Image.LANCZOS), dtype=np.float64))
                 col, row = feather(tw, th, (t["x"], t["y"], t["w"], t["h"]), m["width"], m["height"], args.overlap)
                 wgt = np.outer(row, col)
                 ox, oy = t["x"] * SCALE, t["y"] * SCALE

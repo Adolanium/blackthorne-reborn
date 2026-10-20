@@ -260,40 +260,63 @@ void Renderer::draw_layer(const Scene& scene, std::uint16_t layer_offset, int ro
 // 0x40 (hidden). Pixel data is rows of [mask][8 pixels]; the pixel bytes form
 // the same Mode X planar square as the sprite banks.
 // sub_159F3: the parts of one priority, from the last part to the first.
-void Renderer::draw_parts(const Scene& scene, int cam_x, int cam_y, int priority, Image& out) const {
+void Renderer::parts(const Scene& scene, int priority, std::vector<Part>& out) {
     const Machine& m = (*scene.machine);
     const DataSegment& ds = m.ds;
-    const int width = out.width;
-    std::vector<std::uint8_t> raw;
+    out.clear();
     for (int p = 0xFE; p >= 0; p -= 2) {
         const std::uint16_t attr = ds.field(0x452, p);
         if (!(attr & 0x80) || (attr & 0x340) != (priority << 8)) continue;
-        const std::uint16_t fl = ds.field(0x452, p);
-        const int size = ds.field(0x952, p);
-        if (size != 8 && size != 16 && size != 32 && size != 64) continue;
-        const std::uint8_t* data = m.sprite_data(ds.field(0x852, p), ds.field(0x752, p));
-        if (!data) continue;
-        const int px = static_cast<std::int16_t>(ds.field(0x552, p)) - cam_x;
-        const int py = static_cast<std::int16_t>(ds.field(0x652, p)) - cam_y;
+        Part part;
+        part.size = ds.field(0x952, p);
+        if (part.size != 8 && part.size != 16 && part.size != 32 && part.size != 64) continue;
+        part.data = m.sprite_data(ds.field(0x852, p), ds.field(0x752, p));
+        if (!part.data) continue;
+        part.x = static_cast<std::int16_t>(ds.field(0x552, p));
+        part.y = static_cast<std::int16_t>(ds.field(0x652, p));
+        // Bit 0x10 mirrors the part layout only: the drawers (sub_14E33,
+        // sub_15321) never flip pixels vertically.
+        part.mirror = (attr & 0x20) != 0;
+        part.base = static_cast<std::uint8_t>(ds.field(0xF52, p));
+        out.push_back(part);
+    }
+}
+
+int Renderer::part_pixel(const Part& part, int x, int y) {
+    const int size = part.size;
+    const int scol = part.mirror ? size - 1 - x : x;
+    const int plane = scol & 3;
+    // Index into the pixels without the mask bytes (one per 8 pixels).
+    const int r = (plane * size + y) * (size / 4) + (scol >> 2);
+    const std::uint8_t v = part.data[(r / 8) * 9 + 1 + r % 8];
+    if (!v) return -1;
+    return v >= 16 ? v : v | part.base;  // like tiles: a set high nibble is an absolute colour
+}
+
+std::uint64_t Renderer::part_key(const Part& part) {
+    std::uint64_t h = 1469598103934665603ull;  // FNV-1a
+    auto mix = [&](std::uint8_t b) { h = (h ^ b) * 1099511628211ull; };
+    mix(static_cast<std::uint8_t>(part.size));
+    mix(part.base);
+    for (int i = 0; i < part.size * part.size / 8 * 9; ++i) mix(part.data[i]);
+    return h;
+}
+
+void Renderer::draw_parts(const Scene& scene, int cam_x, int cam_y, int priority, Image& out) const {
+    const int width = out.width;
+    std::vector<Part> list;
+    parts(scene, priority, list);
+    for (const Part& part : list) {
+        const int px = part.x - cam_x, py = part.y - cam_y, size = part.size;
         if (px >= width || py >= kHeight || px + size <= 0 || py + size <= 0) continue;
-        const std::uint8_t base = static_cast<std::uint8_t>(ds.field(0xF52, p));
-        const int n = size * size;
-        raw.resize(static_cast<std::size_t>(n));
-        for (int g = 0; g < n / 8; ++g)
-            for (int k = 0; k < 8; ++k) raw[static_cast<std::size_t>(g * 8 + k)] = data[g * 9 + 1 + k];
-        const int cols = size / 4;
         for (int y = 0; y < size; ++y) {
             const int sy = py + y;
             if (sy < 0 || sy >= kHeight) continue;
-            const int srow = y;  // bit 0x10 mirrors the part layout only: the drawers (sub_14E33, sub_15321) never flip pixels vertically
             for (int x = 0; x < size; ++x) {
                 const int sx = px + x;
                 if (sx < 0 || sx >= width) continue;
-                const int scol = (fl & 0x20) ? size - 1 - x : x;
-                const int plane = scol & 3;
-                const std::uint8_t v = raw[static_cast<std::size_t>((plane * size + srow) * cols + (scol >> 2))];
-                if (!v) continue;
-                out.pixels[static_cast<std::size_t>(sy) * width + sx] = colour(scene.palette, v >= 16 ? v : v | base);  // like tiles: a set high nibble is an absolute colour
+                const int v = part_pixel(part, x, y);
+                if (v >= 0) out.pixels[static_cast<std::size_t>(sy) * width + sx] = colour(scene.palette, v);
             }
         }
     }

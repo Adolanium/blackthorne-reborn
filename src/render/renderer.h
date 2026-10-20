@@ -80,6 +80,23 @@ public:
     void render_layers(const Scene& scene, const RenderOptions& opt, Layers& out) const;
     static int layer_index(std::uint32_t pixel);  // -1 if transparent
 
+    // A sprite part as the original draws it: its square's top left in map
+    // coordinates, size, horizontal mirroring, colour base and pixel data
+    // (size * size / 8 runs of [mask][8 pixels], Mode X planar).
+    struct Part {
+        int x = 0, y = 0, size = 0;
+        bool mirror = false;
+        std::uint8_t base = 0;
+        const std::uint8_t* data = nullptr;
+    };
+    // The parts of one priority, in drawing order (later ones on top).
+    static void parts(const Scene& scene, int priority, std::vector<Part>& out);
+    // The palette index of a part's pixel (x, y) as shown, mirroring
+    // applied; -1 where transparent.
+    static int part_pixel(const Part& part, int x, int y);
+    // The key for replacement art: a hash of the pixel data and colour base.
+    static std::uint64_t part_key(const Part& part);
+
 private:
     // A map layer: cells at `layer_offset` in the map segment, `row_bytes` per row,
     // `width` x `height` cells, viewed from (cam_x, cam_y).

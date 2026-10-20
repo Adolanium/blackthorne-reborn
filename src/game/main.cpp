@@ -275,16 +275,69 @@ void save_settings(const std::filesystem::path& path, const Settings& s) {
     }
 }
 
+// Saves the sprite parts a frame shows that `dir` doesn't have yet: <key>.png
+// at 1x in the level's palette (ds:4A12h, before fades), that palette as
+// <key>.pal (replacements are tinted against it), and a line in parts.tsv
+// (key, size, level, tick).
+void save_parts(const bt::Scene& scene, const std::filesystem::path& dir, int tick) {
+    const bt::Machine& m = *scene.machine;
+    // Not while the screen is faded or fading: sprite colours that only the
+    // shown palette has would be saved dark.
+    int shown = 0, base = 0;
+    for (int i = 0; i < 768; ++i) {
+        if (!(m.ds.raw()[0x4A12 + i - i % 3] | m.ds.raw()[0x4A12 + i - i % 3 + 1] | m.ds.raw()[0x4A12 + i - i % 3 + 2])) continue;
+        shown += scene.palette[i] & 0x3F;
+        base += m.ds.raw()[0x4A12 + i] & 0x3F;
+    }
+    if (shown * 20 < base * 19) return;
+    std::filesystem::create_directories(dir);
+    std::vector<bt::Renderer::Part> parts;
+    for (int priority = 0; priority < 4; ++priority) {
+        bt::Renderer::parts(scene, priority, parts);
+        for (const bt::Renderer::Part& part : parts) {
+            char name[24];
+            std::snprintf(name, sizeof name, "%016llx", static_cast<unsigned long long>(bt::Renderer::part_key(part)));
+            const std::filesystem::path path = dir / (std::string(name) + ".png");
+            std::error_code ec;
+            if (std::filesystem::exists(path, ec)) continue;
+            // Some sprite colours are only in the shown palette, not the level's.
+            std::array<std::uint8_t, 768> palette{};
+            for (int i = 0; i < 256; ++i) {
+                const std::uint8_t* level = m.ds.raw() + 0x4A12 + i * 3;
+                const std::uint8_t* from = (level[0] | level[1] | level[2]) & 0x3F ? level : scene.palette + i * 3;
+                std::copy_n(from, 3, palette.begin() + i * 3);
+            }
+            std::ofstream(dir / (std::string(name) + ".pal"), std::ios::binary).write(reinterpret_cast<const char*>(palette.data()), 768);
+            bt::Image img;
+            img.resize(part.size, part.size);
+            for (int y = 0; y < part.size; ++y)
+                for (int x = 0; x < part.size; ++x) {
+                    const int v = bt::Renderer::part_pixel(part, x, y);
+                    auto c = [&](int k) { return static_cast<std::uint32_t>((palette[v * 3 + k] & 0x3F) * 255 / 63); };
+                    img.pixels[static_cast<std::size_t>(y) * part.size + x] = v < 0 ? 0u : 0xFF000000u | (c(0) << 16) | (c(1) << 8) | c(2);
+                }
+            // Stored as the data is, not mirrored: replacements are drawn the same way.
+            if (part.mirror)
+                for (int y = 0; y < part.size; ++y)
+                    std::reverse(img.pixels.begin() + y * part.size, img.pixels.begin() + (y + 1) * part.size);
+            bt::write_png(path, img);
+            std::ofstream(dir / "parts.tsv", std::ios::app) << name << '\t' << part.size << '\t' << std::hex << m.ds.u16(0x1CA4) << std::dec << '\t' << tick << '\n';
+        }
+    }
+}
+
 }  // namespace
 
 // blackthorne [DATA.DAT] [--filter 0-3] [--wide 0|1] [--level hex] [--pack dir]
-//             [--size WxH --ticks N --shot out.bmp [--frame out.png] [--input spec] [--keys frame:TEXT]]
+//             [--size WxH --ticks N --shot out.bmp [--frame out.png] [--parts dir] [--input spec] [--keys frame:TEXT]]
 // --shot runs N ticks headless, saves the window to a BMP (and --frame the
 // rendered frame before display scaling to a PNG) and exits (for tests).
+// --parts saves every sprite part shown, once per key, as <key>.png (1x, the
+// level's palette) for art packs (tools/artpack.py sprites).
 int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
     int wide_arg = -1, filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
-    std::string shot, input_spec, keys_spec, pack_arg, frame_png;
+    std::string shot, input_spec, keys_spec, pack_arg, frame_png, parts_dir;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         const char* next = i + 1 < argc ? argv[i + 1] : "";
@@ -297,6 +350,7 @@ int main(int argc, char** argv) {
         else if (a == "--keys") keys_spec = next, ++i;
         else if (a == "--pack") pack_arg = next, ++i;
         else if (a == "--frame") frame_png = next, ++i;
+        else if (a == "--parts") parts_dir = next, ++i;
         else if (a == "--size") {
             char* end = nullptr;
             width = static_cast<int>(std::strtol(next, &end, 10));
@@ -424,6 +478,7 @@ int main(int argc, char** argv) {
                 return 2;
             }
             const bool keep_running = handle_events();
+            if (!parts_dir.empty()) save_parts(game->display(), parts_dir, t);
             const Filter keep = draw(frame);
             display->present(frame, false);
             display->filter = keep;

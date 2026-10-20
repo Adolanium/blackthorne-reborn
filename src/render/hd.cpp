@@ -45,6 +45,27 @@ ArtPack::ArtPack(std::filesystem::path dir) : dir_(std::move(dir)) {
         const std::size_t colon = json.find(':', at);
         if (colon != std::string::npos) scale_ = std::clamp(std::atoi(json.c_str() + colon + 1), 1, 8);
     }
+    std::error_code ec;
+    has_sprites_ = std::filesystem::is_directory(dir_ / "sprites", ec);
+}
+
+const ArtPack::Sprite* ArtPack::sprite(std::uint64_t key, int size) const {
+    if (!has_sprites_) return nullptr;
+    auto it = sprites_.find(key);
+    if (it == sprites_.end()) {
+        char name[24];
+        std::snprintf(name, sizeof name, "%016llx", static_cast<unsigned long long>(key));
+        auto sprite = std::make_unique<Sprite>();
+        std::error_code ec;
+        const std::filesystem::path path = dir_ / "sprites" / (std::string(name) + ".png");
+        std::ifstream pal(dir_ / "sprites" / (std::string(name) + ".pal"), std::ios::binary);
+        pal.read(reinterpret_cast<char*>(sprite->palette.data()), static_cast<std::streamsize>(sprite->palette.size()));
+        if (!pal || !std::filesystem::exists(path, ec) || !read_png(path, sprite->image) || sprite->image.width != size * scale_ ||
+            sprite->image.height != size * scale_)
+            sprite.reset();
+        it = sprites_.emplace(key, std::move(sprite)).first;
+    }
+    return it->second.get();
 }
 
 const Image* ArtPack::layer(int level, bool background, int width, int height) const {
@@ -103,13 +124,14 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
         factor[k] = base ? static_cast<float>(shown) / static_cast<float>(base) : 1.0f;
     }
     std::array<std::array<float, 3>, 256> tint{};
+    std::array<bool, 256> unfollowable = animated;  // for the map: cycled, or grown out of black
     std::array<bool, 256> identity{};
     for (int i = 0; i < 256; ++i) {
         const std::uint32_t shown = pal_colour(scene.palette, i), base = pal_colour(m.palette_at_load.data(), i);
         for (int k = 0; k < 3; ++k) {
             const int s = static_cast<int>((shown >> (16 - 8 * k)) & 0xFF), b = static_cast<int>((base >> (16 - 8 * k)) & 0xFF);
             if (b) tint[i][k] = static_cast<float>(s) / static_cast<float>(b);
-            else if (s) animated[static_cast<std::size_t>(i)] = true;
+            else if (s) unfollowable[static_cast<std::size_t>(i)] = true;
             else tint[i][k] = factor[k];
         }
         identity[static_cast<std::size_t>(i)] = tint[i][0] == 1.0f && tint[i][1] == 1.0f && tint[i][2] == 1.0f;
@@ -151,9 +173,14 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
     // Screen cells nothing went over since the last full redraw show it: all
     // background tiles under all foreground tiles, no sprites
     // (Renderer::render_screen).
+    // Text cells in the caption font are redrawn from the full redraw too
+    // (Renderer::draw_text).
+    const bool captions = opt.text && (ds.u16(0x1CF6) & 0x100);
     auto full = [&](int x, int y) {
         const int sx = x - layers.shift;
-        return sx >= 0 && sx < 256 && y < 224 && !m.repainted[static_cast<std::size_t>((y >> 3) * 32 + (sx >> 3))];
+        if (sx < 0 || sx >= 256 || y >= 224) return false;
+        const int cell = (y >> 3) * 32 + (sx >> 3);
+        return !m.repainted[static_cast<std::size_t>(cell)] || (captions && ds.u16(static_cast<std::uint16_t>(0x2D08 + cell * 2)) != 0x20);
     };
     // A map layer pass: back (bit 3 clear) or front tiles of the background or
     // the foreground. In full-redraw cells the background's back pass draws
@@ -182,8 +209,8 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                 const bool original = cells_[static_cast<std::size_t>(((oy + y) >> 4) - cy0) * cw + (((ox + x) >> 4) - cx0)] != 0;
                 const int idx = Renderer::layer_index(own.pixels[i1]);
                 const int front_idx = Renderer::layer_index(front_1x.pixels[i1]);
-                if (!paint || original || (idx >= 0 && animated[static_cast<std::size_t>(idx)]) ||
-                    (merged && front_idx >= 0 && animated[static_cast<std::size_t>(front_idx)])) {
+                if (!paint || original || (idx >= 0 && unfollowable[static_cast<std::size_t>(idx)]) ||
+                    (merged && front_idx >= 0 && unfollowable[static_cast<std::size_t>(front_idx)])) {
                     if (idx >= 0) block(x, y, pal_colour(scene.palette, idx));
                     if (merged && front_idx >= 0) block(x, y, pal_colour(scene.palette, front_idx));
                     continue;
@@ -215,14 +242,62 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                 if (p >> 24) block(x, y, p);
             }
     };
+    // Sprite parts of one priority: the pack's replacement where it has one
+    // (inside the original's shape, tinted like the map), else the original.
+    auto sprite_pass = [&](int priority) {
+        if (!opt.sprites) return;
+        Renderer::parts(scene, priority, parts_);
+        for (const Renderer::Part& part : parts_) {
+            const int px = part.x - layers.view_x, py = part.y - layers.cam_y, size = part.size;
+            if (px >= W || py >= H || px + size <= 0 || py + size <= 0) continue;
+            const ArtPack::Sprite* rep = pack_ ? pack_->sprite(Renderer::part_key(part), size) : nullptr;
+            for (int y = std::max(0, -py); y < size && py + y < H; ++y)
+                for (int x = std::max(0, -px); x < size && px + x < W; ++x) {
+                    const int sx = px + x, sy = py + y;
+                    const int v = Renderer::part_pixel(part, x, y);
+                    if (v < 0 || full(sx, sy)) continue;
+                    // The replacement follows the colour change of its pixel
+                    // since it was painted (fades, tints, other palettes).
+                    float f[3] = {1, 1, 1};
+                    bool plain = true, follow = rep != nullptr && !animated[static_cast<std::size_t>(v)];
+                    if (follow) {
+                        const std::uint32_t shown = pal_colour(scene.palette, v), painted = pal_colour(rep->palette.data(), v);
+                        for (int k = 0; k < 3; ++k) {
+                            const int s = static_cast<int>((shown >> (16 - 8 * k)) & 0xFF), b = static_cast<int>((painted >> (16 - 8 * k)) & 0xFF);
+                            if (b) f[k] = static_cast<float>(s) / static_cast<float>(b);
+                            follow = follow && (b != 0 || s == 0);
+                            plain = plain && s == b;
+                        }
+                    }
+                    if (!follow) {
+                        block(sx, sy, pal_colour(scene.palette, v));
+                        continue;
+                    }
+                    // The replacement is drawn the way the part's data is stored:
+                    // mirrored parts read it from the other side.
+                    const int rx = (part.mirror ? size - 1 - x : x) * S;
+                    for (int yy = 0; yy < S; ++yy) {
+                        const std::uint32_t* src = &rep->image.pixels[static_cast<std::size_t>(y * S + yy) * rep->image.width + rx];
+                        std::uint32_t* dst = &play.pixels[static_cast<std::size_t>(sy * S + yy) * play.width + sx * S];
+                        for (int xx = 0; xx < S; ++xx) {
+                            const std::uint32_t s = src[part.mirror ? S - 1 - xx : xx];
+                            const std::uint32_t a = s >> 24;
+                            if (!a) continue;
+                            const std::uint32_t c = plain ? s : scale_rgb(s, f);
+                            dst[xx] = a == 255 ? c : over(dst[xx], c);
+                        }
+                    }
+                }
+        }
+    };
     map_pass(true, false);
-    image_pass(layers.sprites[0]);
+    sprite_pass(0);
     map_pass(false, false);
-    image_pass(layers.sprites[1]);
-    image_pass(layers.sprites[2]);
+    sprite_pass(1);
+    sprite_pass(2);
     map_pass(true, true);
     map_pass(false, true);
-    image_pass(layers.sprites[3]);
+    sprite_pass(3);
     image_pass(layers.text, false);
     // Widescreen: the columns beside the game screen are dimmed, as in
     // Renderer::render_screen.

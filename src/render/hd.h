@@ -1,6 +1,7 @@
 // High-resolution rendering with art packs (docs/VISUALS.md).
 #pragma once
 
+#include <array>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -13,6 +14,10 @@ namespace bt {
 //   <pack>/pack.json                 {"scale": 4}
 //   <pack>/levels/<ID>/fg.png        the foreground, scale times the 1x export
 //   <pack>/levels/<ID>/bg.png        the background, likewise
+//   <pack>/sprites/<key>.png         a sprite part, scale times its size
+//                                    (key: Renderer::part_key, 16 hex digits)
+//   <pack>/sprites/<key>.pal         the palette it was painted against (768
+//                                    bytes of 6-bit RGB, from blackthorne --parts)
 // Missing files (or files of the wrong size) fall back to the original art.
 class ArtPack {
 public:
@@ -22,11 +27,19 @@ public:
     // The repainted layer for a level, or nullptr. `width` / `height` are the
     // layer's size at 1x: the image must be exactly scale times that.
     const Image* layer(int level, bool background, int width, int height) const;
+    // The replacement for a sprite part of `size` pixels square, or nullptr.
+    struct Sprite {
+        Image image;
+        std::array<std::uint8_t, 768> palette{};  // what it was painted against
+    };
+    const Sprite* sprite(std::uint64_t key, int size) const;
 
 private:
     std::filesystem::path dir_;
     int scale_ = 4;
     mutable std::map<std::pair<int, bool>, std::unique_ptr<Image>> cache_;  // nullptr = not in the pack
+    bool has_sprites_ = false;
+    mutable std::map<std::uint64_t, std::unique_ptr<Sprite>> sprites_;  // nullptr = not in the pack
 };
 
 // Draws the screen at `scale` times 320x240 (wider in widescreen): the
@@ -46,6 +59,7 @@ private:
     mutable Image classic_, play_, page_;
     mutable Renderer::Layers layers_;
     mutable std::vector<std::uint8_t> cells_;
+    mutable std::vector<Renderer::Part> parts_;
 };
 
 }  // namespace bt
