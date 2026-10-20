@@ -24,6 +24,7 @@ target_include_directories(btdata PUBLIC src)
 
 add_library(btengine STATIC
     src/engine/data_segment.cpp
+    src/engine/vm.cpp
 )
 target_link_libraries(btengine PUBLIC btdata)
 
@@ -40,3 +41,7 @@ enable_testing()
 add_executable(bttests tests/data_tests.cpp)
 target_link_libraries(bttests PRIVATE btengine)
 add_test(NAME data COMMAND bttests)
+
+add_executable(btvmtests tests/vm_tests.cpp)
+target_link_libraries(btvmtests PRIVATE btengine)
+add_test(NAME vm COMMAND btvmtests)
