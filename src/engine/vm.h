@@ -17,6 +17,14 @@ constexpr std::uint16_t kAcc = 0x38;            // VM accumulator
 constexpr std::uint16_t kRngState = 0x4E;       // 10 bytes
 constexpr std::uint16_t kScriptBaseSeg = 0x259A;  // segment of entry 64
 constexpr std::uint16_t kFieldTable = 0x28CA;
+constexpr std::uint16_t kBitMasks = 0x288A;       // 1 << i
+constexpr std::uint16_t kBitClearMasks = 0x28AA;  // ~(1 << i)
+constexpr std::uint16_t kActorEnd = 0x32C;        // 2 * live actor slots
+constexpr std::uint16_t kProbeClass = 0x354;      // class of actor found by a probe
+constexpr std::uint16_t kProbeSlot = 0x356;       // slot of actor found by a probe
+constexpr std::uint16_t kClassLists = 0x60CC;     // 0xFF-terminated sorted byte lists
+constexpr std::uint16_t kLevelDescriptor = 0x1CEE;
+constexpr std::uint16_t kSpawnRecords = 0x1D24;   // 14 bytes each, inside the descriptor
 }  // namespace ds_addr
 
 // Actor field bases (field k at 0x13C2 + k * 0x28, indexed by slot).
@@ -30,7 +38,20 @@ constexpr std::uint16_t kY = 0x161A;
 constexpr std::uint16_t kType = 0x15A2;
 constexpr std::uint16_t kTarget = 0x17FA;
 constexpr std::uint16_t kRelated = 0x1822;
+constexpr std::uint16_t kTop = 0x13C2;
+constexpr std::uint16_t kBottom = 0x13EA;
+constexpr std::uint16_t kLeft = 0x1412;
+constexpr std::uint16_t kRight = 0x143A;
+constexpr std::uint16_t kSpawnIndex = 0x157A;
+constexpr std::uint16_t kClass = 0x1642;
+constexpr std::uint16_t kProbeDy = 0x17D2;
+constexpr std::uint16_t kHalfWidth = 0x1872;
+constexpr std::uint16_t kHalfHeight = 0x189A;
 }  // namespace field
+
+namespace flag {
+constexpr std::uint16_t kFacing = 0x40;  // selects add/sub direction and probe side
+}  // namespace flag
 
 // The actor-script interpreter (sub_1609A and its 256 handlers).
 //
@@ -90,6 +111,23 @@ private:
     Flow op_random();                                   // 0x40
     template <int Dest, int Op> Flow op_combine();      // 0x41-0x64
     template <int Mode, int Cmp> Flow op_branch();      // 0x65-0x82
+    template <int Mode, bool Equal> Flow op_call_if();  // 0x83-0x8C
+    template <int Dest, bool AddWhenFacing> Flow op_facing_add();  // 0x8D-0x94
+    Flow op_set_target();                               // 0x95
+    template <int Mode> Flow op_bit_test();             // 0x96-0x9A
+    Flow op_random_bit();                               // 0x9B
+    template <int Dest> Flow op_bit_write();            // 0x9C-0x9F
+    template <int Mode, bool Equal, bool Call> Flow op_bit_branch();  // 0xA0-0xB3
+    template <int Side, bool Negate> Flow op_probe();   // 0xB4-0xBB
+    template <int Offset> Flow op_spawn_store();        // 0xBC-0xBF
+
+    std::uint16_t dest_addr(int dest);                  // reads a field byte or addr16
+    std::uint16_t bit_mask(std::uint8_t b) const { return ds_.u16(static_cast<std::uint16_t>(ds_addr::kBitMasks + b)); }
+    std::uint16_t read_bit(int mode);                   // bit8 then source operand -> 0/1
+    void call(std::uint16_t target);                    // sub_16135 after the target word
+    bool in_class_list(std::uint8_t list, std::uint8_t cls) const;
+    bool probe(int side, std::uint8_t list);            // sub_18331 / 1833E / 1829A / 182A7
+    void spawn_record_store(int offset, std::uint16_t value);
 
     DataSegment& ds_;
     const Bytes& scripts_;
