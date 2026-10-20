@@ -85,6 +85,12 @@ public:
     void mark_offscreen_actors();                                // loc_114AE
     void anim_tick(int slot);                                    // sub_1207C
     void physics(int slot);                                      // loc_12404
+    void schedule_actor(int slot);                               // sub_1603F
+    void run_scheduler();                                        // sub_1601A + sub_15FCE
+    void integrate_velocity();                                   // sub_111BC
+    void run_check_pass(int pass);                               // sub_17AC7 (+1), sub_17AB2 (-1)
+    void apply_anchors();                                        // sub_11260
+    void move_parts();                                           // sub_11F49
 
     // Host interaction.
     std::vector<VmEvent>& events() { return events_; }

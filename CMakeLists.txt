@@ -30,6 +30,8 @@ add_library(btengine STATIC
     src/engine/vm_anim.cpp
     src/engine/vm_actors.cpp
     src/engine/vm_misc.cpp
+    src/engine/vm_tick.cpp
+    src/engine/game.cpp
 )
 target_link_libraries(btengine PUBLIC btdata)
 

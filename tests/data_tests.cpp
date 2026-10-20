@@ -12,6 +12,7 @@
 #include "data/sprites.h"
 #include "data/xmidi.h"
 #include "engine/data_segment.h"
+#include "engine/game.h"
 
 namespace {
 
@@ -88,6 +89,22 @@ void test_data_segment(const std::filesystem::path& exe) {
     check(bt::DataSegment::field_base(14) == 0x15F2, "field 14 is x");
 }
 
+void test_game(const bt::Archive& a, const std::filesystem::path& exe) {
+    bt::Game game(a, exe);
+    try {
+        game.load_level(0xC0, 56, 108);
+        const auto& ds = game.machine().ds;
+        check(ds.field(bt::field::kScriptSeg, 0) != 0, "Kyle is alive after level load");
+        int live = 0;
+        for (int s = 0; s < 0x28; s += 2) live += ds.field(bt::field::kScriptSeg, s) != 0;
+        std::printf("level 1: %d live actors after load\n", live);
+        for (int t = 0; t < 300; ++t) game.tick();
+        std::printf("level 1: Kyle at (%d,%d) after 300 ticks\n", ds.field(bt::field::kX, 0), ds.field(bt::field::kY, 0));
+    } catch (const std::exception& e) {
+        check(false, std::string("level 1 runs 300 ticks: ") + e.what());
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -103,6 +120,7 @@ int main(int argc, char** argv) {
     test_actor_types(archive);
     test_music(archive);
     test_data_segment(path.parent_path() / "BTHORNE.EXE");
+    test_game(archive, path.parent_path() / "BTHORNE.EXE");
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "OK", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }
