@@ -66,14 +66,14 @@ int main(int argc, char** argv) {
     if (!SDL_Init(SDL_INIT_VIDEO)) return 1;
     SDL_Window* window = nullptr;
     SDL_Renderer* sdl = nullptr;
-    if (!SDL_CreateWindowAndRenderer("Blackthorne Reborn", bt::Renderer::kWidth * 4, bt::Renderer::kHeight * 4,
+    if (!SDL_CreateWindowAndRenderer("Blackthorne Reborn", bt::Renderer::kScreenWidth * 4, bt::Renderer::kScreenHeight * 4,
                                      SDL_WINDOW_RESIZABLE, &window, &sdl))
         return 1;
     SDL_SetRenderVSync(sdl, 1);
     audio.open();  // the game runs silently if there is no audio device
     if (music.open()) audio.music = &music;
     SDL_Texture* tex = SDL_CreateTexture(sdl, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
-                                         bt::Renderer::kWidth, bt::Renderer::kHeight);
+                                         bt::Renderer::kScreenWidth, bt::Renderer::kScreenHeight);
     SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
 
     bt::Image frame;
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
         }
         if (acc > kTickSeconds * 5) acc = 0;  // don't spiral after a stall
 
-        renderer.render(*game, frame);
+        renderer.render_screen(*game, frame);
         SDL_UpdateTexture(tex, nullptr, frame.pixels.data(), frame.width * 4);
         int ww = 0, wh = 0;
         SDL_GetCurrentRenderOutputSize(sdl, &ww, &wh);

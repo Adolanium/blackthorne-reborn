@@ -34,6 +34,8 @@ public:
     std::uint16_t field(std::uint16_t base, int slot) const { return u16(static_cast<std::uint16_t>(base + slot)); }
     void set_field(std::uint16_t base, int slot, std::uint16_t v) { set_u16(static_cast<std::uint16_t>(base + slot), v); }
 
+    const std::uint8_t* raw() const { return mem_.data(); }
+
     // Field addressed by script index k (table at ds:28CAh: k * 0x28 + 0x13C2).
     static std::uint16_t field_base(int k) { return static_cast<std::uint16_t>(0x13C2 + k * 0x28); }
 

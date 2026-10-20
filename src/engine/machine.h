@@ -23,6 +23,7 @@ struct Machine {
     // symbolic values; sprite_data() maps them back to buffers.
     static constexpr std::uint16_t kFrameSeg = 0x5000;   // ds:259Eh: actor frame buffers
     static constexpr std::uint16_t kStaticSeg = 0x6000;  // ds:25A0h: preloaded single-frame sprites
+    static constexpr std::uint16_t kDataSeg = 0x7000;    // "ds" itself (HUD icons live in the data segment)
     std::array<std::uint8_t, 0x10000> frames{};
     std::array<std::uint8_t, 0x10000> statics{};
     // Sprite banks by slot (the byte index into ds:1152h divided by 2), raw
@@ -33,6 +34,7 @@ struct Machine {
     const std::uint8_t* sprite_data(std::uint16_t seg, std::uint16_t off) const {
         if (seg == kFrameSeg) return frames.data() + off;
         if (seg == kStaticSeg) return statics.data() + off;
+        if (seg == kDataSeg) return ds.raw() + off;
         return nullptr;
     }
 

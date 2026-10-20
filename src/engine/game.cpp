@@ -121,6 +121,7 @@ void Game::load_level(int level_id, int x, int y) {
 
     set_camera_bounds();
     place_camera();
+    hud_init();
     music_action();
     spawn_start_records();
     vm_->spawn_visible_records();
@@ -296,6 +297,92 @@ void Game::spawn_start_records() {
     }
 }
 
+// sub_140DC + sub_1407B: HUD state and its sprite parts. Part 0 and part 1
+// are used as stamps for the inventory panel; parts 3-8 show Kyle's health
+// with 16x16 icons (resource 0x4E) kept in the data segment at ds:57A6h.
+void Game::hud_init() {
+    DataSegment& ds = machine_->ds;
+    ds.set_u16(0x100, 8);
+    if (!has_hud()) return;
+    ds.set_u16(0x100, 0);
+    std::uint16_t next = static_cast<std::uint16_t>(ds.u16(0x1CB0) + 2);
+    ds.set_u16(0x1CC4, next >= 0x10 ? 0 : next);
+    ds.set_u16(0x1CC2, 3);
+    for (int i = 0; i < 8; ++i) ds.set_u16(static_cast<std::uint16_t>(0x60A6 + 2 * i), 3);
+    // sub_1402A: the inventory icon bank is resource 0x4C (its slot in ds:1152h).
+    int bank = 0x1E;
+    while (bank >= 0 && ds.u16(static_cast<std::uint16_t>(0x1152 + bank)) != 0x4C) bank -= 2;
+    ds.set_u16(0x57A4, static_cast<std::uint16_t>(bank));
+    // sub_1407B
+    ds.set_u16(0x752, 0x5C26);
+    ds.set_u16(0x852, Machine::kDataSeg);
+    ds.set_u16(0x452, 2);
+    ds.set_u16(0x952, 0x20);
+    std::uint16_t seg = 0, off = 0;
+    vm_->alloc_frame_buffer(0x4D, seg, off);
+    ds.set_u16(0x754, off);
+    ds.set_u16(0x854, seg);
+    ds.set_u16(0xF54, 0xF0F0);
+    ds.set_u16(0x454, 2);
+    ds.set_u16(0x954, 0x20);
+    std::uint16_t at = 0x57A6;
+    for (std::uint8_t b : archive_.resource(0x4E)) ds.set_u8(at++, b);
+    for (int si = 0xA; si >= 0; si -= 2) {
+        ds.set_u16(static_cast<std::uint16_t>(0x858 + si), Machine::kDataSeg);
+        ds.set_u16(static_cast<std::uint16_t>(0xF58 + si), 0x7070);
+        ds.set_u16(static_cast<std::uint16_t>(0x458 + si), 0x300);
+        ds.set_u16(static_cast<std::uint16_t>(0x958 + si), 0x10);
+    }
+}
+
+void Game::hud_tick() {
+    DataSegment& ds = machine_->ds;
+    if (!has_hud()) return;
+    // sub_1411C: [ and ] cycle the selected inventory slot.
+    const std::uint16_t pressed = ds.u16(0x35C);
+    if ((pressed & 0x3000) && (pressed & 0x3000) != 0x3000) {
+        int sel = static_cast<std::int16_t>(ds.u16(0x1CB0));
+        sel = (pressed & 0x2000) ? (sel + 2 >= 0x10 ? 0 : sel + 2) : (sel - 2 < 0 ? 0xE : sel - 2);
+        ds.set_u16(0x1CB0, static_cast<std::uint16_t>(sel));
+        vm_->events().push_back({VmEvent::Kind::PlaySound, 0x83});
+    }
+    // sub_14196: note inventory changes; skip empty slots when the selected one empties.
+    for (int di = 0xE; di >= 0; di -= 2) {
+        const std::uint16_t item = ds.u16(static_cast<std::uint16_t>(0x1CB2 + di));
+        if (item == ds.u16(static_cast<std::uint16_t>(0x60B6 + di))) continue;
+        ds.set_u16(static_cast<std::uint16_t>(0x60B6 + di), item);
+        ds.set_u16(static_cast<std::uint16_t>(0x60A6 + di), ds.u16(static_cast<std::uint16_t>(0x60A6 + di)) | 3);
+        if (di != ds.u16(0x1CB0)) continue;
+        ds.set_u16(0x1CC2, ds.u16(0x1CC2) | 3);
+        if (item) continue;
+        int k = di;
+        do {
+            k = k + 2 >= 0x10 ? 0 : k + 2;
+        } while (!ds.u16(static_cast<std::uint16_t>(0x1CB2 + k)) && k != ds.u16(0x1CB0));
+        ds.set_u16(0x1CB0, static_cast<std::uint16_t>(k));
+    }
+    // sub_14176
+    if (ds.u16(0x1CB0) != ds.u16(0x1CC4)) {
+        ds.set_u16(0x1CC4, ds.u16(0x1CB0));
+        ds.set_u16(0x1CC2, ds.u16(0x1CC2) | 3);
+    }
+    // sub_141DD: health parts at the top right of the playfield, 4 points each.
+    const std::uint16_t cx = ds.u16(0x1B4E), cy = ds.u16(0x1B50);
+    for (int si = 0xA, x = cx + 0x98; si >= 0; si -= 2, x += 0x10) {
+        ds.set_u16(static_cast<std::uint16_t>(0x458 + si), ds.u16(static_cast<std::uint16_t>(0x458 + si)) & 0xFF7F);
+        ds.set_u16(static_cast<std::uint16_t>(0x558 + si), static_cast<std::uint16_t>(x));
+        ds.set_u16(static_cast<std::uint16_t>(0x658 + si), static_cast<std::uint16_t>(cy + 8));
+    }
+    int health = static_cast<std::int16_t>(ds.field(0x148A, 0));
+    for (int si = 0; health > 0 && si < 0xC; si += 2) {
+        const int n = health >= 4 ? 4 : health;
+        health -= 4;
+        ds.set_u16(static_cast<std::uint16_t>(0x758 + si), static_cast<std::uint16_t>((n - 1) * 0x120 + 0x57A6));
+        ds.set_u16(static_cast<std::uint16_t>(0xE58 + si), 0x303);
+        ds.set_u16(static_cast<std::uint16_t>(0x458 + si), ds.u16(static_cast<std::uint16_t>(0x458 + si)) | 0x80);
+    }
+}
+
 void Game::main_loop_actors() {
     vm_->run_scheduler();
     vm_->integrate_velocity();
@@ -326,6 +413,7 @@ void Game::tick() {
         vm_->spawn_visible_records();
         main_loop_actors();
     }
+    hud_tick();  // sub_1411C, sub_14164 close the main loop
     if (machine_->ds.u16(0x318) & 1) change_level();
 }
 

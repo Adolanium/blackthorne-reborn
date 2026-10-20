@@ -179,7 +179,7 @@ public:
     }
 
     void draw_game(int ww, int wh) {
-        game_renderer_.render(*game_, frame_);
+        game_renderer_.render_screen(*game_, frame_);
         if (!play_tex_) {
             play_tex_.reset(SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, frame_.width, frame_.height));
             SDL_SetTextureScaleMode(play_tex_.get(), SDL_SCALEMODE_NEAREST);

@@ -17,7 +17,37 @@ std::uint32_t colour(const DataSegment& ds, int index) {
 
 }  // namespace
 
+// Panel images: u16 width, u16 height, then Mode X planes (plane-major).
 Renderer::Renderer(const Archive& archive) {
+    auto panel = [&](int entry) {
+        const Bytes b = archive.entry(entry);
+        Panel p;
+        p.width = b[0] | (b[1] << 8);
+        p.height = b[2] | (b[3] << 8);
+        p.pixels.resize(static_cast<std::size_t>(p.width) * p.height);
+        const int cols = p.width / 4;
+        for (int plane = 0; plane < 4; ++plane)
+            for (int y = 0; y < p.height; ++y)
+                for (int c = 0; c < cols; ++c)
+                    p.pixels[static_cast<std::size_t>(y) * p.width + c * 4 + plane] = b[4 + (plane * p.height + y) * cols + c];
+        return p;
+    };
+    side_panel_ = panel(73);
+    bottom_bar_ = panel(74);
+    for (const SpriteFrame& f : decode_sprite_bank(archive.resource(0x4C), 32, 32)) item_icons_.push_back(f.pixels);
+    {  // resource 0x4D is stored in the blitter rows; frame 0 is the selection frame
+        const Bytes b = archive.resource(0x4D);
+        std::vector<std::uint8_t> raw;
+        for (std::size_t g = 0; g < 128 && g * 9 + 9 <= b.size(); ++g)
+            for (int k = 0; k < 8; ++k) raw.push_back(b[g * 9 + 1 + k]);
+        raw.resize(1024);
+        selection_frame_.assign(1024, 0);
+        for (int plane = 0; plane < 4; ++plane)
+            for (int y = 0; y < 32; ++y)
+                for (int c = 0; c < 8; ++c)
+                    selection_frame_[static_cast<std::size_t>(y) * 32 + c * 4 + plane] = raw[static_cast<std::size_t>((plane * 32 + y) * 8 + c)];
+    }
+
     for (int f = 0; f < 2; ++f) {
         const Bytes font = archive.entry(288 + 2 * f);
         const Bytes masks = archive.entry(289 + 2 * f);
@@ -29,6 +59,70 @@ Renderer::Renderer(const Archive& archive) {
             for (int k = 0; k < 8 && i * 8 + k < masks.size(); ++k) g.mask[k] = masks[i * 8 + k];
             fonts_[f].push_back(g);
         }
+    }
+}
+
+void Renderer::render_screen(const Game& game, Image& out, const RenderOptions& opt) const {
+    Image play;
+    render(game, play, opt);
+    out.resize(kScreenWidth, kScreenHeight);
+    const bool hud = game.has_hud();
+    const int ox = hud ? 0 : (kScreenWidth - kWidth) / 2, oy = hud ? 0 : (kScreenHeight - kHeight) / 2;
+    for (int y = 0; y < kHeight; ++y)
+        std::copy_n(&play.pixels[static_cast<std::size_t>(y) * kWidth], kWidth,
+                    &out.pixels[static_cast<std::size_t>(y + oy) * kScreenWidth + ox]);
+    if (hud) draw_hud(game, out);
+}
+
+// A HUD stamp: 4-bit pixels ORed with the colour base; 0 is transparent.
+void Renderer::stamp(const Game& game, Image& out, const std::vector<std::uint8_t>& pixels, int size, int x, int y,
+                     std::uint8_t colour_base) const {
+    const DataSegment& ds = game.machine().ds;
+    for (int yy = 0; yy < size; ++yy)
+        for (int xx = 0; xx < size; ++xx) {
+            const std::uint8_t v = pixels[static_cast<std::size_t>(yy) * size + xx];
+            const int sx = x + xx, sy = y + yy;
+            if (!v || sx < 0 || sy < 0 || sx >= out.width || sy >= out.height) continue;
+            out.pixels[static_cast<std::size_t>(sy) * out.width + sx] = colour(ds, v | colour_base);
+        }
+}
+
+// The right panel with the 8 inventory slots (sub_1423E), the bottom bar and
+// the selected item name (sub_142D4 / sub_14DE6).
+void Renderer::draw_hud(const Game& game, Image& out) const {
+    const DataSegment& ds = game.machine().ds;
+    auto blit = [&](const Panel& p, int x0, int y0) {
+        for (int y = 0; y < p.height; ++y)
+            for (int x = 0; x < p.width; ++x)
+                out.pixels[static_cast<std::size_t>(y + y0) * out.width + x + x0] =
+                    colour(ds, p.pixels[static_cast<std::size_t>(y) * p.width + x]);
+    };
+    blit(side_panel_, kWidth, 0);
+    blit(bottom_bar_, 0, kHeight);
+    const int selected = ds.u16(0x1CB0);
+    for (int di = 0; di < 0x10; di += 2) {
+        const int x = 0x110, y = 0xF * di;
+        if (!item_icons_.empty()) stamp(game, out, item_icons_[0], 32, x, y, 0x80);
+        const int item = ds.u16(static_cast<std::uint16_t>(0x1CB2 + di));
+        if (item > 0 && item < static_cast<int>(item_icons_.size())) stamp(game, out, item_icons_[item], 32, x, y, 0xF0);
+        if (di == selected) stamp(game, out, selection_frame_, 32, x, y, 0xF0);
+    }
+    // Item name: 16 characters from the table for the language at ds:579Eh.
+    const int item = ds.u16(static_cast<std::uint16_t>(0x1CB2 + selected));
+    const std::uint16_t names = ds.u16(static_cast<std::uint16_t>(0x579E + ds.u16(0x6A) * 2));
+    const auto& font = fonts_[0];
+    for (int i = 0; i < 16; ++i) {
+        const std::uint8_t ch = ds.u8(static_cast<std::uint16_t>(names + item * 16 + i));
+        const int g = ch - 0x20;
+        if (g <= 0 || g >= static_cast<int>(font.size())) continue;
+        const Glyph& gl = font[g];
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x) {
+                const int plane = x & 3, data_col = x >> 2;
+                if (gl.mask[plane * 2 + (y >> 2)] & (0x80 >> ((y & 3) * 2 + data_col)))
+                    out.pixels[static_cast<std::size_t>(kHeight + 4 + y) * out.width + 64 + i * 8 + x] =
+                        colour(ds, gl.pixels[y * 8 + x]);
+            }
     }
 }
 

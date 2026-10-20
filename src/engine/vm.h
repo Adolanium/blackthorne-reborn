@@ -86,6 +86,7 @@ public:
     void anim_tick(int slot);                                    // sub_1207C
     void physics(int slot);                                      // loc_12404
     void schedule_actor(int slot);                               // sub_1603F
+    bool alloc_frame_buffer(std::uint16_t bank, std::uint16_t& seg, std::uint16_t& off);  // sub_11F9E
     void run_scheduler();                                        // sub_1601A + sub_15FCE
     void integrate_velocity();                                   // sub_111BC
     void run_check_pass(int pass);                               // sub_17AC7 (+1), sub_17AB2 (-1)
@@ -231,7 +232,6 @@ private:
     Flow op_palette();                                     // 0xF1
     Flow op_forget_record();                               // 0xF2
 
-    bool alloc_frame_buffer(std::uint16_t bank, std::uint16_t& seg, std::uint16_t& off);  // sub_11F9E
     bool alloc_parts(int count, int& first);               // sub_116A8 / loc_11652
     void set_part_size(int p, bool large);                 // sub_11FF4
     void finish_spawn(int slot);                           // loc_1706D tail

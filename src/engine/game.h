@@ -48,6 +48,7 @@ public:
     std::uint16_t foreground_offset() const { return machine_->ds.u16(0x25B0); }
     std::uint16_t background_offset() const { return machine_->ds.u16(0x25B2); }
     bool has_background() const { return has_background_; }
+    bool has_hud() const { return machine_->ds.u16(0x1CF6) & 1; }
 
 private:
     void walk_descriptor();
@@ -58,6 +59,8 @@ private:
     void main_loop_actors();       // the actor part of sub_10043
     void change_level();           // sub_1011B, level-exit branch
     void music_action();           // sub_11C64: the header's music action
+    void hud_init();               // sub_140DC + sub_1407B
+    void hud_tick();               // sub_1411C (inventory cycling) + sub_14164 (health, inventory state)
 
     const Archive& archive_;
     std::unique_ptr<Machine> machine_;
