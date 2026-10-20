@@ -276,6 +276,14 @@ def cmd_nearest(args):
     print(f"round-trip pack written to {args.pack}")
 
 
+def cmd_stitch_all(args):
+    cmd_stitch(args)
+    if os.path.exists(os.path.join(args.work, "sprites", "manifest.json")):
+        cmd_stitch_sprites(args)
+    if os.path.exists(os.path.join(args.work, "hud", "manifest.json")):
+        cmd_stitch_hud(args)
+
+
 # HUD -----------------------------------------------------------------------
 
 def cmd_split_hud(args):
@@ -507,6 +515,14 @@ def main():
     s.add_argument("export")
     s.add_argument("pack")
     s.set_defaults(func=cmd_check)
+    s = sub.add_parser("stitch-all", help="stitch --alpha key, stitch-sprites and stitch-hud in one go")
+    s.add_argument("export")
+    s.add_argument("work")
+    s.add_argument("pack")
+    s.add_argument("--overlap", type=int, default=32)
+    s.add_argument("--edges", choices=("smooth", "hard"), default="smooth")
+    s.add_argument("--alpha", choices=("shape", "key"), default="key")
+    s.set_defaults(func=cmd_stitch_all)
     s = sub.add_parser("split-hud")
     s.add_argument("export")
     s.add_argument("work")
