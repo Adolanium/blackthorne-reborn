@@ -18,13 +18,17 @@ std::uint32_t colour(const DataSegment& ds, int index) {
 }  // namespace
 
 Renderer::Renderer(const Archive& archive) {
-    const Bytes font = archive.entry(288);
-    for (std::size_t o = 0; o + 64 <= font.size(); o += 64) {
-        std::array<std::uint8_t, 64> g{};
-        for (int plane = 0; plane < 4; ++plane)
-            for (int y = 0; y < 8; ++y)
-                for (int col = 0; col < 2; ++col) g[y * 8 + col * 4 + plane] = font[o + plane * 16 + y * 2 + col];
-        font_.push_back(g);
+    for (int f = 0; f < 2; ++f) {
+        const Bytes font = archive.entry(288 + 2 * f);
+        const Bytes masks = archive.entry(289 + 2 * f);
+        for (std::size_t o = 0, i = 0; o + 64 <= font.size(); o += 64, ++i) {
+            Glyph g{};
+            for (int plane = 0; plane < 4; ++plane)
+                for (int y = 0; y < 8; ++y)
+                    for (int col = 0; col < 2; ++col) g.pixels[y * 8 + col * 4 + plane] = font[o + plane * 16 + y * 2 + col];
+            for (int k = 0; k < 8 && i * 8 + k < masks.size(); ++k) g.mask[k] = masks[i * 8 + k];
+            fonts_[f].push_back(g);
+        }
     }
 }
 
@@ -119,18 +123,26 @@ void Renderer::draw_parts(const Game& game, Image& out) const {
     }
 }
 
-// The 32x28 text layer at ds:2D08h; 0x20 is an empty cell.
+// The 32x28 text layer at ds:2D08h, drawn with the tile blitter from the font
+// (sub_146BA): glyph = character - 0x20, pixels are palette entries 0-3,
+// opaque where the glyph mask is set. 0x20 is an empty cell.
 void Renderer::draw_text(const Game& game, Image& out) const {
     const DataSegment& ds = game.machine().ds;
-    static constexpr std::uint32_t kShades[4] = {0xFF000000u, 0xFF6060A0u, 0xFFB0B0D0u, 0xFFFFFFFFu};
+    const auto& font = fonts_[(ds.u16(0x1CF6) & 0x100) ? 1 : 0];
     for (int row = 0; row < 28; ++row) {
         for (int col = 0; col < 32; ++col) {
             const std::uint16_t v = ds.u16(static_cast<std::uint16_t>(0x2D08 + (row * 32 + col) * 2));
-            if (v == 0x20 || v >= font_.size()) continue;
-            const auto& g = font_[v];
+            if (v == 0x20 || v >= font.size()) continue;
+            const Glyph& g = font[v];
             for (int y = 0; y < 8; ++y)
-                for (int x = 0; x < 8; ++x)
-                    out.pixels[static_cast<std::size_t>(row * 8 + y) * kWidth + col * 8 + x] = kShades[g[y * 8 + x] & 3];
+                for (int x = 0; x < 8; ++x) {
+                    // Mask bytes follow the planar data: byte = plane*2 + (row >= 4),
+                    // bit 7..0 = the 8 data bytes (4 rows x 2 columns) of that run.
+                    const int plane = x & 3, data_col = x >> 2;
+                    const int byte = plane * 2 + (y >> 2), bit = (y & 3) * 2 + data_col;
+                    if (g.mask[byte] & (0x80 >> bit))
+                        out.pixels[static_cast<std::size_t>(row * 8 + y) * kWidth + col * 8 + x] = colour(ds, g.pixels[y * 8 + x]);
+                }
         }
     }
 }

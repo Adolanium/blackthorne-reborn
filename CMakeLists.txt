@@ -42,9 +42,10 @@ add_executable(btviewer src/viewer/main.cpp)
 target_link_libraries(btviewer PRIVATE btrender SDL3::SDL3-static)
 
 if(MSVC)
-    target_compile_options(btdata PRIVATE /W4 /permissive-)
-    target_compile_options(btviewer PRIVATE /W4 /permissive-)
-    target_compile_options(btengine PRIVATE /W4 /permissive-)
+    # /w44456-/w44459: warn when a declaration shadows another one.
+    foreach(t btdata btengine btrender btviewer)
+        target_compile_options(${t} PRIVATE /W4 /permissive- /w44456 /w44457 /w44458 /w44459)
+    endforeach()
 endif()
 
 enable_testing()

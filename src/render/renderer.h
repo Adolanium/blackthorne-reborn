@@ -43,7 +43,11 @@ private:
     void draw_parts(const Game& game, Image& out) const;
     void draw_text(const Game& game, Image& out) const;
 
-    std::vector<std::array<std::uint8_t, 64>> font_;  // 8x8 glyphs, values 0-3
+    struct Glyph {
+        std::array<std::uint8_t, 64> pixels;  // values 0-3 = palette entries 0-3
+        std::array<std::uint8_t, 8> mask;     // one bit per data byte, planar order
+    };
+    std::vector<Glyph> fonts_[2];  // entries 288/289 and the alternate 290/291
 };
 
 }  // namespace bt
