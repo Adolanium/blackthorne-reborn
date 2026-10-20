@@ -20,16 +20,17 @@ adds presentation upgrades on top.
 ## Phase 2: Engine core (faithful)
 - [x] Timing: 30 ticks/s locked to vsync (`FASTER` cheat = 60)
 - [x] Data segment model initialised from BTHORNE.EXE
-- [x] Actor script VM: control flow, 0x3B-0xBF (load/store/arith/branch/bits/probes)
-- [ ] VM opcodes 0x07-0x3A and 0xC0-0xFF (actors, animation, sound, map)
-- [ ] Actor spawning (`sub_1115D`) and the scheduler (`sub_1601A`)
-- [ ] Main loop / tick (`sub_10043`)
-- [ ] Map rendering and scrolling
-- [ ] Kyle: input, animation state machine, physics
-- [ ] Enemies, items, triggers, doors, elevators
-- [ ] HUD, menus, passwords, save game
-- [ ] Music (XMIDI to General MIDI / OPL emulation) and VOC sound
-- [ ] Side-by-side comparison against DOSBox for accuracy
+- [x] Actor script VM: all 256 opcodes (docs/vm)
+- [x] Actor spawning, despawning, spawn records and the scheduler
+- [x] Main loop: movement passes, event checks, collision, flip-screen camera
+- [x] Boot flow and level changes (logos, title menu, intro, levels)
+- [x] Renderer: map layers from the live map, sprite parts, text layer, HUD
+- [x] Input (original controls), passwords and save file hooks
+- [x] Palette cycling, tile animation, screen shake
+- [x] Sound effects (VOC) and General MIDI music / MIDI effects
+- [ ] Pause and the in-game Esc menu flow, black-frame transitions
+- [ ] Verify gameplay against DOSBox (movement, combat, items, elevators)
+- [ ] Remaining open details: palette id 0x48 (colour 0x0707), stray intro glyphs
 
 ## Phase 3: Make it beautiful
 - [ ] Widescreen viewport (wider camera over existing maps)
