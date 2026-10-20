@@ -24,6 +24,7 @@ struct TileRef {
     bool flip_x() const { return raw & 0x10; }
     bool flip_y() const { return raw & 0x20; }
     int palette_row() const { return raw & 7; }
+    bool in_front() const { return raw & 8; }  // drawn over sprites below priority 3
 };
 
 // 16x16 block of four tiles: top-left, top-right, bottom-left, bottom-right.

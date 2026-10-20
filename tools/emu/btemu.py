@@ -21,6 +21,8 @@ import struct
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from unicorn import Uc, UcError, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR, UC_HOOK_INSN, UC_HOOK_CODE
 from unicorn.x86_const import *
 
@@ -71,6 +73,7 @@ class Machine:
         self.ems_next = 0
         self.ems_handles = {}
         self.log = []
+        self.vga = None  # enable_vga() swaps video memory for the VGA model
         self.load_exe(os.path.join(game_dir, 'BTHORNE.EXE'))
         self.uc.hook_add(UC_HOOK_INTR, self.on_int)
         self.uc.hook_add(UC_HOOK_INSN, self.on_in, None, 1, 0, UC_X86_INS_IN)
@@ -340,8 +343,14 @@ class Machine:
     # --- ports -----------------------------------------------------------
     def on_in(self, uc, port, size, _):
         if port == 0x3DA:
+            if self.vga:
+                self.vga.reset_flipflop()
             self.retrace ^= 9
             return self.retrace
+        if self.vga:
+            v = self.vga.port_in(port)
+            if v is not None:
+                return v
         if port == 0x40:
             self.pit = (self.pit - 0x40) & 0xFFFF
             return (self.pit >> 8) & 0xFF if getattr(self, '_pit_hi', False) else self.pit & 0xFF
@@ -353,7 +362,12 @@ class Machine:
         return 0xFF if size == 1 else 0xFFFF
 
     def on_out(self, uc, port, size, value, _):
-        pass
+        if self.vga:
+            self.vga.port_out(port, size, value)
+
+    def enable_vga(self):
+        from vga import Vga
+        self.vga = Vga(self.uc)
 
     # --- running ---------------------------------------------------------
     def ds_bytes(self):
@@ -370,6 +384,7 @@ def main():
     ap.add_argument('--map', action='store_true', help='also write the map segment per tick to <out>.map')
     ap.add_argument('--savegame', default='', help='4-character password to put in savegame.000')
     ap.add_argument('--budget', type=int, default=20_000_000, help='instructions allowed per tick')
+    ap.add_argument('--shots', default='', help='frames to save as <out>.<frame>.png (emulates the VGA; slower)')
     args = ap.parse_args()
     schedule = parse_input(args.input)
     pokes = parse_pokes(args.poke)
@@ -377,6 +392,9 @@ def main():
     if args.savegame:
         open(os.path.join(scratch, 'savegame.000'), 'wb').write(args.savegame.encode('ascii')[:4])
     m = Machine(args.game_dir, scratch)
+    shots = {int(x) for x in args.shots.split(',') if x}
+    if shots:
+        m.enable_vga()
     out = open(args.out, 'wb')
     map_out = open(args.out + '.map', 'wb') if args.map else None
     state = {'tick': 0}
@@ -387,6 +405,8 @@ def main():
         if wait <= 0:
             return
         out.write(m.ds_bytes())
+        if state['tick'] + 1 in shots:
+            m.vga.save_png('%s.%d.png' % (args.out, state['tick'] + 1))
         if map_out:
             seg = struct.unpack('<H', uc.mem_read((ds << 4) + 0x259C, 2))[0]
             map_out.write(bytes(uc.mem_read(seg << 4, 0x10000)))

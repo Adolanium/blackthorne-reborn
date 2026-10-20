@@ -71,7 +71,9 @@ void Renderer::render_screen(const Game& game, Image& out, const RenderOptions& 
     // Screen shake (sub_10AC1 offsets, applied by the page flip).
     const DataSegment& ds = game.machine().ds;
     const int shake_x = static_cast<std::int16_t>(ds.u16(0x344)), shake_y = static_cast<std::int16_t>(ds.u16(0x346));
-    const int ox = (hud ? 0 : (screen_w - play.width) / 2) - shake_x, oy = (hud ? 0 : (kScreenHeight - kHeight) / 2) - shake_y;
+    // Without the HUD the original centres the playfield horizontally but
+    // keeps it at the top (the bottom 16 lines stay black).
+    const int ox = (hud ? 0 : (screen_w - play.width) / 2) - shake_x, oy = -shake_y;
     for (int y = 0; y < kHeight; ++y) {
         const int sy = y + oy;
         if (sy < 0 || sy >= kScreenHeight) continue;
@@ -129,7 +131,7 @@ void Renderer::draw_hud(const Game& game, Image& out) const {
     for (int i = 0; i < 16; ++i) {
         const std::uint8_t ch = ds.u8(static_cast<std::uint16_t>(names + item * 16 + i));
         const int g = ch - 0x20;
-        if (g <= 0 || g >= static_cast<int>(font.size())) continue;
+        if (g < 0 || g >= static_cast<int>(font.size())) continue;  // spaces too: their pixels fill the box
         const Glyph& gl = font[g];
         for (int y = 0; y < 8; ++y)
             for (int x = 0; x < 8; ++x) {
@@ -153,13 +155,30 @@ void Renderer::render(const Game& game, Image& out, const RenderOptions& opt) co
     int view_x = cam_x - opt.extra;
     if (opt.extra) view_x = map_px >= width ? std::clamp(view_x, 0, map_px - width) : (map_px - width) / 2;
     const int shift = cam_x - view_x;  // where the 256-wide game screen starts
-    if (opt.background && game.has_background())
-        draw_layer(game, game.background_offset(), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17), s16(0x1B52) - shift,
-                   s16(0x1B54), out);
-    if (opt.foreground)
-        draw_layer(game, game.foreground_offset(), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth),
-                   ds.u16(Machine::kMapHeight), view_x, cam_y, out);
-    if (opt.sprites) draw_parts(game, view_x, cam_y, out);
+    // sub_15BA0's order: tiles with bit 3 set (in the tile word) and sprite
+    // priority 3 are in front; within a layer of sprites, lower part numbers
+    // are drawn later (on top).
+    auto background = [&](int pass) {
+        if (opt.background && game.has_background())
+            draw_layer(game, game.background_offset(), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17), s16(0x1B52) - shift,
+                       s16(0x1B54), pass, out);
+    };
+    auto foreground = [&](int pass) {
+        if (opt.foreground)
+            draw_layer(game, game.foreground_offset(), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth),
+                       ds.u16(Machine::kMapHeight), view_x, cam_y, pass, out);
+    };
+    auto sprites = [&](int priority) {
+        if (opt.sprites) draw_parts(game, view_x, cam_y, priority, out);
+    };
+    background(0);
+    sprites(0);
+    foreground(0);
+    sprites(1);
+    sprites(2);
+    background(8);
+    foreground(8);
+    sprites(3);
     if (opt.extra && opt.dim_sides) {
         for (int y = 0; y < kHeight; ++y)
             for (int x = 0; x < width; ++x) {
@@ -168,12 +187,26 @@ void Renderer::render(const Game& game, Image& out, const RenderOptions& opt) co
                 p = 0xFF000000u | (((p >> 1) & 0x7F7F7Fu) + ((p >> 3) & 0x1F1F1Fu));  // about 62%
             }
     }
-    if (opt.text) draw_text(game, shift, out);
+    if (opt.text) {
+        Image tiles;  // the map alone, for text cells in the alternate font
+        if (ds.u16(0x1CF6) & 0x100) {
+            tiles.resize(width, kHeight);
+            if (opt.background && game.has_background())
+                for (int pass : {0, 8})
+                    draw_layer(game, game.background_offset(), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17),
+                               s16(0x1B52) - shift, s16(0x1B54), pass, tiles);
+            if (opt.foreground)
+                for (int pass : {0, 8})
+                    draw_layer(game, game.foreground_offset(), ds.u16(Machine::kMapRowBytes), ds.u16(Machine::kMapWidth),
+                               ds.u16(Machine::kMapHeight), view_x, cam_y, pass, tiles);
+        }
+        draw_text(game, shift, tiles.width ? &tiles : nullptr, out);
+    }
 }
 
 // One map layer (cells: bits 0-9 metatile) over the camera window.
 void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, int row_bytes, int map_w, int map_h, int cam_x,
-                          int cam_y, Image& out) const {
+                          int cam_y, int pass, Image& out) const {
     const Machine& m = game.machine();
     const DataSegment& ds = m.ds;
     const std::uint16_t metatiles = ds.u16(Machine::kMetatileTable);
@@ -185,6 +218,7 @@ void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, int row_
             const std::uint16_t mt = static_cast<std::uint16_t>(metatiles + (cell & 0x3FF) * 8);
             for (int k = 0; k < 4; ++k) {
                 const TileRef ref{m.map_u16(static_cast<std::uint16_t>(mt + 2 * k))};
+                if ((ref.raw & 8) != pass) continue;  // bit 3: drawn in front of sprites below priority 3
                 const std::size_t tile = static_cast<std::size_t>(ref.tile());
                 const std::uint8_t* px = m.tiles.data() + tile * 64;
                 const std::uint8_t* mask = m.tile_masks.data() + ((tile * 8) & 0x1FFF);
@@ -211,20 +245,15 @@ void Renderer::draw_layer(const Game& game, std::uint16_t layer_offset, int row_
 // Sprite parts: pool entries with attribute bit 0x80 (allocated) and without
 // 0x40 (hidden). Pixel data is rows of [mask][8 pixels]; the pixel bytes form
 // the same Mode X planar square as the sprite banks.
-void Renderer::draw_parts(const Game& game, int cam_x, int cam_y, Image& out) const {
+// sub_159F3: the parts of one priority, from the last part to the first.
+void Renderer::draw_parts(const Game& game, int cam_x, int cam_y, int priority, Image& out) const {
     const Machine& m = game.machine();
     const DataSegment& ds = m.ds;
     const int width = out.width;
-    struct Item { int priority, p; };
-    std::vector<Item> items;
-    for (int p = 0; p < 0x100; p += 2) {
-        const std::uint16_t fl = ds.field(0x452, p);
-        if ((fl & 0x80) && !(fl & 0x40)) items.push_back({(fl >> 8) & 3, p});
-    }
-    std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.priority > b.priority; });
     std::vector<std::uint8_t> raw;
-    for (const Item& it : items) {
-        const int p = it.p;
+    for (int p = 0xFE; p >= 0; p -= 2) {
+        const std::uint16_t attr = ds.field(0x452, p);
+        if (!(attr & 0x80) || (attr & 0x340) != (priority << 8)) continue;
         const std::uint16_t fl = ds.field(0x452, p);
         const int size = ds.field(0x952, p);
         if (size != 8 && size != 16 && size != 32 && size != 64) continue;
@@ -256,12 +285,16 @@ void Renderer::draw_parts(const Game& game, int cam_x, int cam_y, Image& out) co
     }
 }
 
-// The 32x28 text layer at ds:2D08h, drawn with the tile blitter from the font
-// (sub_146BA): glyph = character - 0x20, pixels are palette entries 0-3,
-// opaque where the glyph mask is set. 0x20 is an empty cell.
-void Renderer::draw_text(const Game& game, int x0, Image& out) const {
+// The 32x28 text layer at ds:2D08h (sub_15AB3); 0x20 is an empty cell,
+// otherwise the glyph number. With the normal font (sub_15AD2) a glyph is
+// drawn whole by sub_146BA, all 64 pixels (palette entries 0-3). With the
+// alternate font (ds:1CF6h bit 0x100, sub_15B2E) the cell is first redrawn
+// from the map tiles alone, covering sprites, and the glyph goes on top
+// where its mask is set.
+void Renderer::draw_text(const Game& game, int x0, const Image* tiles, Image& out) const {
     const DataSegment& ds = game.machine().ds;
-    const auto& font = fonts_[(ds.u16(0x1CF6) & 0x100) ? 1 : 0];
+    const bool alternate = ds.u16(0x1CF6) & 0x100;
+    const auto& font = fonts_[alternate ? 1 : 0];
     for (int row = 0; row < 28; ++row) {
         for (int col = 0; col < 32; ++col) {
             const std::uint16_t v = ds.u16(static_cast<std::uint16_t>(0x2D08 + (row * 32 + col) * 2));
@@ -269,12 +302,14 @@ void Renderer::draw_text(const Game& game, int x0, Image& out) const {
             const Glyph& g = font[v];
             for (int y = 0; y < 8; ++y)
                 for (int x = 0; x < 8; ++x) {
+                    const std::size_t at = static_cast<std::size_t>(row * 8 + y) * out.width + x0 + col * 8 + x;
                     // Mask bytes follow the planar data: byte = plane*2 + (row >= 4),
                     // bit 7..0 = the 8 data bytes (4 rows x 2 columns) of that run.
                     const int plane = x & 3, data_col = x >> 2;
                     const int byte = plane * 2 + (y >> 2), bit = (y & 3) * 2 + data_col;
-                    if (g.mask[byte] & (0x80 >> bit))
-                        out.pixels[static_cast<std::size_t>(row * 8 + y) * out.width + x0 + col * 8 + x] = colour(ds, g.pixels[y * 8 + x]);
+                    const bool set = g.mask[byte] & (0x80 >> bit);
+                    if (!alternate || set) out.pixels[at] = colour(ds, g.pixels[y * 8 + x]);
+                    else if (tiles) out.pixels[at] = tiles->pixels[at];
                 }
         }
     }

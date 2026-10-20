@@ -43,6 +43,30 @@ frame.
 Both tools accept `--poke frame:addr=value` to set data segment words between
 frames, for example to set the password.
 
+## Screens
+
+`btemu.py --shots f1,f2,...` also models the VGA:
+- the four planes of Mode X video memory, with latches, map mask and bit mask;
+- the CRTC start address, offset and line compare;
+- pixel panning and the DAC.
+
+It saves what the original actually displays at those frames.
+`bttrace --shots` renders ours, and `tools/emu/screens.py` compares the two
+pixel by pixel. The original shows at frame t the page it drew after frame
+t-1, so it is compared with our render of t-1.
+
+This found:
+- the vertical placement of screens without the HUD;
+- the drawing order of sprite priorities and of tiles with bit 3 set (they
+  go in front of sprites below priority 3);
+- glyphs that are opaque with the normal font and masked over the map with
+  the caption font;
+- the item name box.
+
+Known cosmetic difference: the original's bottom bar shares video memory with
+the first rows of a page. Its last line from x=216 picks up stray bytes
+after screen flips. Ours draws the bar intact.
+
 ## Running it
 
 ```sh

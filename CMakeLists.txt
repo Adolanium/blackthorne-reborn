@@ -99,4 +99,4 @@ add_executable(btmusicwav tests/musicwav.cpp)
 target_link_libraries(btmusicwav PRIVATE btaudio)
 
 add_executable(bttrace tests/trace.cpp)
-target_link_libraries(bttrace PRIVATE btengine)
+target_link_libraries(bttrace PRIVATE btrender)

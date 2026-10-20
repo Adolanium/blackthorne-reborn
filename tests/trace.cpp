@@ -6,6 +6,7 @@
 // Input for tick k is the schedule's bits at k - 1, matching btemu.py, which
 // writes the word for the next tick at each frame boundary.
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <exception>
@@ -16,6 +17,7 @@
 
 #include "data/archive.h"
 #include "engine/game.h"
+#include "render/renderer.h"
 
 namespace {
 
@@ -73,14 +75,24 @@ int main(int argc, char** argv) {
     }
     bool with_map = false;
     std::string savegame;
+    std::vector<int> shots;  // frames to render to <out.bin>.<frame>.ppm
     for (int i = 4; i < argc; ++i) {
         if (std::string(argv[i]) == "--map") with_map = true;
         if (std::string(argv[i]) == "--savegame" && i + 1 < argc) savegame = argv[i + 1];
+        if (std::string(argv[i]) == "--shots" && i + 1 < argc)
+            for (const char* p = argv[i + 1]; *p;) {
+                char* end = nullptr;
+                shots.push_back(static_cast<int>(std::strtol(p, &end, 10)));
+                p = *end == ',' ? end + 1 : end;
+                if (end == p && *p) break;
+            }
     }
     const auto schedule = parse_input(spec);
     const auto pokes = parse_pokes(poke_spec);
 
     bt::Archive archive(data);
+    const bt::Renderer renderer(archive);
+    bt::Image screen;
     bt::Game game(archive, data.parent_path() / "BTHORNE.EXE");
     if (!savegame.empty())  // what savegame.000 holds for CONTINUE
         game.vm().load_password_ = [savegame](std::array<char, 4>& pw) {
@@ -104,9 +116,24 @@ int main(int argc, char** argv) {
             std::printf("engine error at tick %d (level %02X): %s\n", t, game.level_id(), e.what());
             return 2;
         }
+        bool quit = false;
+        for (const bt::VmEvent& ev : game.vm().events()) quit |= ev.kind == bt::VmEvent::Kind::Quit;
         game.vm().events().clear();
+        if (quit) {  // like the original exiting to DOS: this frame is not recorded
+            std::printf("ticks recorded: %d, quit\n", t - 1);
+            return 0;
+        }
         out.write(reinterpret_cast<const char*>(game.machine().ds.raw()), bt::DataSegment::kSize);
         if (with_map) map_out.write(reinterpret_cast<const char*>(game.machine().map.data()), static_cast<std::streamsize>(game.machine().map.size()));
+        if (std::find(shots.begin(), shots.end(), t) != shots.end()) {
+            renderer.render_screen(game, screen);
+            std::ofstream ppm(std::string(argv[3]) + "." + std::to_string(t) + ".ppm", std::ios::binary);
+            ppm << "P6" << char(10) << screen.width << ' ' << screen.height << char(10) << "255" << char(10);
+            for (std::uint32_t px : screen.pixels) {
+                const char rgb[3] = {static_cast<char>(px >> 16), static_cast<char>(px >> 8), static_cast<char>(px)};
+                ppm.write(rgb, 3);
+            }
+        }
     }
     std::printf("ticks recorded: %d, level %02X\n", ticks, game.level_id());
     return 0;
