@@ -38,7 +38,9 @@ stored size.
 |---|---|---|
 | XMIDI music | 17-36 | `FORM....XDIR` (Miles AIL Extended MIDI) (confirmed by magic) |
 | Creative VOC sound | 37-63 | `Creative Voice File` (confirmed by magic) |
-| Text tables | 1, 2, 3 | English, French, German: u16 offset table, then strings (menus, dialogue, hints; `` line breaks) (observed) |
+| Font | 288 (+289 masks); alternate 290 (+291) | 96 glyphs of 8x8, Mode X planar like tiles, pixel values 0-3 (4 shades); the companion entry is 8 bytes of 1-bit mask per glyph. Loaded by `sub_10716`; header flag 0x100 selects 290/291 (confirmed by render) |
+| Text tables | 1, 2, 3 | English, French, German: u16 offset table, then strings (menus, dialogue, hints; `
+` line breaks) (observed) |
 | OPL timbre bank | 16 | Miles Global Timbre Library: 6-byte records (patch, bank, u32 offset) until patch 0xFF; 210 timbres of 14 bytes (u16 size + OPL2 registers); bank 1 = percussion. The Fat Man General MIDI timbres (confirmed structure) |
 | Audio drivers | 4-15 | Miles AIL drivers (raw): AdLib, SB FM, SB Pro FM (x2), PAS 8, PAS 16, Gravis UltraSound, Roland MT-32/MPU, SB digital, SB Pro digital, PAS digital, UltraSound digital. Not needed by a port |
 | VGA palette, 256 colours | 91, 97, 103, ... | 768 bytes, 6-bit RGB (observed) |
