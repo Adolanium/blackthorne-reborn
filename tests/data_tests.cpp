@@ -10,6 +10,7 @@
 #include "data/archive.h"
 #include "data/level.h"
 #include "data/sprites.h"
+#include "data/xmidi.h"
 #include "engine/data_segment.h"
 
 namespace {
@@ -63,6 +64,22 @@ void test_actor_types(const bt::Archive& a) {
     check(types[0].parts == 3, "type 0 has 3 parts");
 }
 
+void test_music(const bt::Archive& a) {
+    int tracks = 0, notes = 0;
+    for (int i = 0; i < 352; ++i) {
+        const bt::Bytes d = a.entry(i);
+        if (d.size() < 12 || d[0] != 'F' || d[1] != 'O' || d[2] != 'R' || d[3] != 'M') continue;
+        const auto seqs = bt::parse_xmidi(d);
+        for (const auto& s : seqs) {
+            ++tracks;
+            for (const auto& e : s.events) notes += (e.status & 0xF0) == 0x90;
+            check(s.length_ticks > 0, "track " + std::to_string(i) + " has a length");
+        }
+    }
+    std::printf("music: %d tracks, %d notes\n", tracks, notes);
+    check(tracks >= 20, "at least 20 XMIDI tracks");
+}
+
 void test_data_segment(const std::filesystem::path& exe) {
     const bt::DataSegment ds(exe);
     check(ds.u16(0x28CA + 2) == 0x28, "field table entry 1 is 0x28");
@@ -84,6 +101,7 @@ int main(int argc, char** argv) {
     test_archive(archive);
     test_levels(archive);
     test_actor_types(archive);
+    test_music(archive);
     test_data_segment(path.parent_path() / "BTHORNE.EXE");
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "OK", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

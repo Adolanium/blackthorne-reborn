@@ -19,6 +19,7 @@ add_library(btdata STATIC
     src/data/archive.cpp
     src/data/level.cpp
     src/data/sprites.cpp
+    src/data/xmidi.cpp
 )
 target_include_directories(btdata PUBLIC src)
 
