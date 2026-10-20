@@ -47,6 +47,23 @@ ArtPack::ArtPack(std::filesystem::path dir) : dir_(std::move(dir)) {
     }
     std::error_code ec;
     has_sprites_ = std::filesystem::is_directory(dir_ / "sprites", ec);
+    std::ifstream pal(dir_ / "hud" / "hud.pal", std::ios::binary);
+    pal.read(reinterpret_cast<char*>(hud_palette_.data()), static_cast<std::streamsize>(hud_palette_.size()));
+    has_hud_ = static_cast<bool>(pal);
+}
+
+const Image* ArtPack::hud(const std::string& name, int width, int height) const {
+    if (!has_hud_) return nullptr;
+    auto it = hud_.find(name);
+    if (it == hud_.end()) {
+        auto img = std::make_unique<Image>();
+        std::error_code ec;
+        const std::filesystem::path path = dir_ / "hud" / (name + ".png");
+        if (!std::filesystem::exists(path, ec) || !read_png(path, *img) || img->width != width * scale_ || img->height != height * scale_)
+            img.reset();
+        it = hud_.emplace(name, std::move(img)).first;
+    }
+    return it->second.get();
 }
 
 const ArtPack::Sprite* ArtPack::sprite(std::uint64_t key, int size) const {
@@ -324,6 +341,9 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
     for (int y = 0; y < play.height; ++y)
         std::copy_n(play.pixels.begin() + static_cast<std::ptrdiff_t>(y * play.width), play.width,
                     page.pixels.begin() + static_cast<std::ptrdiff_t>(y * page.width + px * S));
+    // The HUD from the pack (Renderer::draw_hud at scale).
+    if ((ds.u16(0x1CF6) & 1) && pack_ && pack_->has_hud()) draw_hud(scene, classic, animated, page);
+
     // The shake moves the whole screen (see Renderer::render_screen).
     if (&page == &out) return;
     out.resize(page.width, page.height);
@@ -333,6 +353,85 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
             out.pixels[static_cast<std::size_t>(y) * out.width + x] =
                 (fx >= 0 && fx < page.width && fy >= 0 && fy < page.height) ? page.pixels[static_cast<std::size_t>(fy) * page.width + fx] : 0xFF000000u;
         }
+}
+
+void HdRenderer::draw_hud(const Scene& scene, const Image& classic, const std::array<bool, 256>& cycled, Image& page) const {
+    const int S = scale_;
+    const DataSegment& ds = scene.machine->ds;
+    const std::array<std::uint8_t, 768>& painted_pal = pack_->hud_palette();
+    const int stretch = classic.width - Renderer::kScreenWidth;
+    auto block = [&](int x, int y, std::uint32_t c) {
+        for (int yy = 0; yy < S; ++yy)
+            std::fill_n(page.pixels.begin() + static_cast<std::ptrdiff_t>((y * S + yy) * page.width + x * S), S, c);
+    };
+    // Screen pixel (x, y) shows palette entry v; `rep` is the replacement it
+    // comes from, at (rx, ry) in game pixels.
+    auto put = [&](int x, int y, int v, const Image* rep, int rx, int ry) {
+        float f[3] = {1, 1, 1};
+        bool plain = true, follow = rep != nullptr && !cycled[static_cast<std::size_t>(v)];
+        if (follow) {
+            const std::uint32_t shown = pal_colour(scene.palette, v), painted = pal_colour(painted_pal.data(), v);
+            for (int k = 0; k < 3; ++k) {
+                const int s = static_cast<int>((shown >> (16 - 8 * k)) & 0xFF), b = static_cast<int>((painted >> (16 - 8 * k)) & 0xFF);
+                if (b) f[k] = static_cast<float>(s) / static_cast<float>(b);
+                follow = follow && (b != 0 || s == 0);
+                plain = plain && s == b;
+            }
+        }
+        if (!follow) {
+            block(x, y, pal_colour(scene.palette, v));
+            return;
+        }
+        for (int yy = 0; yy < S; ++yy) {
+            const std::uint32_t* src = &rep->pixels[static_cast<std::size_t>(ry * S + yy) * rep->width + rx * S];
+            std::uint32_t* dst = &page.pixels[static_cast<std::size_t>(y * S + yy) * page.width + x * S];
+            for (int xx = 0; xx < S; ++xx) {
+                const std::uint32_t a = src[xx] >> 24;
+                if (!a) continue;
+                const std::uint32_t c = plain ? src[xx] : scale_rgb(src[xx], f);
+                dst[xx] = a == 255 ? c : over(dst[xx], c);
+            }
+        }
+    };
+    const Renderer::Panel& side = base_.side_panel();
+    const Renderer::Panel& bottom = base_.bottom_bar();
+    const Image* side_rep = pack_->hud("side", side.width, side.height);
+    const Image* bottom_rep = pack_->hud("bottom", bottom.width, bottom.height);
+    for (int y = 0; y < side.height; ++y)
+        for (int x = 0; x < side.width; ++x)
+            put(Renderer::kWidth + stretch + x, y, side.pixels[static_cast<std::size_t>(y) * side.width + x], side_rep, x, y);
+    // In widescreen the bar repeats a column inside its text box.
+    for (int y = 0; y < bottom.height; ++y)
+        for (int x = 0; x < bottom.width + stretch; ++x) {
+            const int src = x < 128 ? x : x < 128 + stretch ? 128 : x - stretch;
+            put(x, Renderer::kHeight + y, bottom.pixels[static_cast<std::size_t>(y) * bottom.width + src], bottom_rep, src, y);
+        }
+    for (int x = 216 + stretch; x < classic.width; ++x) block(x, Renderer::kScreenHeight - 1, pal_colour(scene.palette, 0));
+    // The inventory: empty slot, item icon, selection frame (stamped like sprites).
+    auto stamp = [&](const std::vector<std::uint8_t>& pixels, const Image* rep, int x0, int y0, int base) {
+        for (int yy = 0; yy < 32; ++yy)
+            for (int xx = 0; xx < 32; ++xx) {
+                const std::uint8_t v = pixels[static_cast<std::size_t>(yy) * 32 + xx];
+                if (v) put(x0 + xx, y0 + yy, v >= 16 ? v : (v | base), rep, xx, yy);
+            }
+    };
+    const auto& icons = base_.item_icons();
+    const int selected = ds.u16(0x1CB0);
+    char name[16];
+    for (int di = 0; di < 0x10; di += 2) {
+        const int x = 0x110 + stretch, y = 0xF * di;
+        if (!icons.empty()) stamp(icons[0], pack_->hud("icon_00", 32, 32), x, y, 0x80);
+        const int item = ds.u16(static_cast<std::uint16_t>(0x1CB2 + di));
+        if (item > 0 && item < static_cast<int>(icons.size())) {
+            std::snprintf(name, sizeof name, "icon_%02x", item);
+            stamp(icons[static_cast<std::size_t>(item)], pack_->hud(name, 32, 32), x, y, 0xF0);
+        }
+        if (di == selected) stamp(base_.selection_frame(), pack_->hud("selection", 32, 32), x, y, 0xF0);
+    }
+    // The item name keeps the original font.
+    const int cells = 16 + stretch / 8;
+    for (int y = Renderer::kHeight + 4; y < Renderer::kHeight + 12; ++y)
+        for (int x = 64; x < 64 + cells * 8; ++x) block(x, y, classic.pixels[static_cast<std::size_t>(y) * classic.width + x]);
 }
 
 }  // namespace bt

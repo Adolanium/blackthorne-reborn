@@ -97,6 +97,20 @@ public:
     // The key for replacement art: a hash of the pixel data and colour base.
     static std::uint64_t part_key(const Part& part);
 
+    // The HUD's artwork as palette indices: the right panel (64x240 at
+    // x = 256), the bottom bar (256x16 at y = 224), the 32x32 item icons
+    // (0 is the empty slot, stamped with colour base 0x80, the others with
+    // 0xF0) and the selection frame (0xF0). Icon pixels below 16 take the
+    // colour base; 0 is transparent.
+    struct Panel {
+        int width = 0, height = 0;
+        std::vector<std::uint8_t> pixels;
+    };
+    const Panel& side_panel() const { return side_panel_; }
+    const Panel& bottom_bar() const { return bottom_bar_; }
+    const std::vector<std::vector<std::uint8_t>>& item_icons() const { return item_icons_; }
+    const std::vector<std::uint8_t>& selection_frame() const { return selection_frame_; }
+
 private:
     // A map layer: cells at `layer_offset` in the map segment, `row_bytes` per row,
     // `width` x `height` cells, viewed from (cam_x, cam_y).
@@ -109,10 +123,6 @@ private:
     void stamp(const Scene& scene, Image& out, const std::vector<std::uint8_t>& pixels, int size, int x, int y,
                std::uint8_t colour_base) const;
 
-    struct Panel {
-        int width = 0, height = 0;
-        std::vector<std::uint8_t> pixels;
-    };
     Panel side_panel_, bottom_bar_;
     std::vector<std::vector<std::uint8_t>> item_icons_;  // 32x32, resource 0x4C
     std::vector<std::uint8_t> selection_frame_;         // 32x32, resource 0x4D frame 0

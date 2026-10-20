@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <string>
 
 #include "render/renderer.h"
 
@@ -18,6 +19,10 @@ namespace bt {
 //                                    (key: Renderer::part_key, 16 hex digits)
 //   <pack>/sprites/<key>.pal         the palette it was painted against (768
 //                                    bytes of 6-bit RGB, from blackthorne --parts)
+//   <pack>/hud/side.png, bottom.png  the HUD's right panel and bottom bar
+//   <pack>/hud/icon_<nn>.png         item icon nn (hex; 00 is the empty slot)
+//   <pack>/hud/selection.png         the selection frame
+//   <pack>/hud/hud.pal               the palette the HUD was painted against
 // Missing files (or files of the wrong size) fall back to the original art.
 class ArtPack {
 public:
@@ -33,12 +38,20 @@ public:
         std::array<std::uint8_t, 768> palette{};  // what it was painted against
     };
     const Sprite* sprite(std::uint64_t key, int size) const;
+    // A HUD image ("side", "bottom", "icon_05", "selection") of w x h game
+    // pixels, or nullptr; hud_palette() is what it was painted against.
+    const Image* hud(const std::string& name, int width, int height) const;
+    bool has_hud() const { return has_hud_; }
+    const std::array<std::uint8_t, 768>& hud_palette() const { return hud_palette_; }
 
 private:
     std::filesystem::path dir_;
     int scale_ = 4;
     mutable std::map<std::pair<int, bool>, std::unique_ptr<Image>> cache_;  // nullptr = not in the pack
     bool has_sprites_ = false;
+    bool has_hud_ = false;
+    std::array<std::uint8_t, 768> hud_palette_{};
+    mutable std::map<std::string, std::unique_ptr<Image>> hud_;  // nullptr = not in the pack
     mutable std::map<std::uint64_t, std::unique_ptr<Sprite>> sprites_;  // nullptr = not in the pack
 };
 
@@ -52,6 +65,7 @@ public:
     void render_screen(const Scene& scene, Image& out, const RenderOptions& opt = {}) const;
 
 private:
+    void draw_hud(const Scene& scene, const Image& classic, const std::array<bool, 256>& cycled, Image& page) const;
     const Renderer& base_;
     const ArtPack* pack_;
     int scale_;

@@ -12,6 +12,7 @@
 //   preview.png                 background under foreground, for reference
 //   level.json                  sizes, parallax and the base palette
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -132,6 +133,52 @@ int main(int argc, char** argv) {
         } catch (const std::exception& e) {
             std::printf("level %s: skipped (%s)\n", id, e.what());
         }
+    }
+    // The HUD, in the first level's palette (entries the level palette
+    // lacks come from the shown one), as <out>/hud/: side.png, bottom.png,
+    // icon_<nn>.png, selection.png and hud.pal.
+    try {
+        bt::Game game(archive, data.parent_path() / "BTHORNE.EXE");
+        game.start_level(0xC0);
+        for (int t = 0; t < 60; ++t) game.tick();  // past the fade in
+        const bt::Machine& m = game.machine();
+        std::array<std::uint8_t, 768> pal{};
+        for (int i = 0; i < 256; ++i) {
+            const std::uint8_t* level = m.ds.raw() + 0x4A12 + i * 3;
+            const std::uint8_t* from = (level[0] | level[1] | level[2]) & 0x3F ? level : m.dac.data() + i * 3;
+            std::copy_n(from, 3, pal.begin() + i * 3);
+        }
+        auto rgb = [&](int v) {
+            auto c = [&](int k) { return static_cast<std::uint32_t>((pal[static_cast<std::size_t>(v * 3 + k)] & 0x3F) * 255 / 63); };
+            return 0xFF000000u | (c(0) << 16) | (c(1) << 8) | c(2);
+        };
+        const std::filesystem::path hud = out / "hud";
+        std::filesystem::create_directories(hud);
+        std::ofstream(hud / "hud.pal", std::ios::binary).write(reinterpret_cast<const char*>(pal.data()), 768);
+        auto panel = [&](const bt::Renderer::Panel& p, const char* name) {
+            bt::Image img;
+            img.resize(p.width, p.height);
+            for (std::size_t i = 0; i < img.pixels.size(); ++i) img.pixels[i] = rgb(p.pixels[i]);
+            bt::write_png(hud / name, img);
+        };
+        panel(renderer.side_panel(), "side.png");
+        panel(renderer.bottom_bar(), "bottom.png");
+        auto icon = [&](const std::vector<std::uint8_t>& px, int base, const std::string& name) {
+            bt::Image img;
+            img.resize(32, 32);
+            for (std::size_t i = 0; i < img.pixels.size(); ++i) img.pixels[i] = px[i] ? rgb(px[i] >= 16 ? px[i] : (px[i] | base)) : 0u;
+            bt::write_png(hud / name, img);
+        };
+        const auto& icons = renderer.item_icons();
+        for (std::size_t i = 0; i < icons.size(); ++i) {
+            char name[16];
+            std::snprintf(name, sizeof name, "icon_%02x.png", static_cast<unsigned>(i));
+            icon(icons[i], i ? 0xF0 : 0x80, name);
+        }
+        icon(renderer.selection_frame(), 0xF0, "selection.png");
+        std::printf("HUD: panels, %zu icons\n", icons.size());
+    } catch (const std::exception& e) {
+        std::printf("HUD: skipped (%s)\n", e.what());
     }
     std::printf("%d level(s) exported to %s\n", exported, out.string().c_str());
     return 0;

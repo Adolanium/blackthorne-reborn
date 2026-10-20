@@ -172,6 +172,37 @@ pixels. A pack replaces them one part at a time.
   head). Each part is repainted on its own, so keep the style consistent
   across a sheet.
 
+## The HUD
+
+`btexport` also writes the HUD to `<export>/hud/`: the right panel
+(`side.png`), the bottom bar (`bottom.png`), the item icons (`icon_<nn>.png`,
+`00` is the empty slot), the selection frame and `hud.pal`, the palette they
+are drawn in. A pack's `hud/` holds the same files at 4x, plus `hud.pal`.
+`HdRenderer` draws them in the original's places, tinted against
+`hud.pal` like sprites. The item name keeps the original font.
+`artpack.py split-hud` / `stitch-hud` prepare them for the model.
+
+## Repainting everything with Codex
+
+`tools/codex_repaint.py` runs Codex CLI with its image model over a whole
+work folder: every level section, sprite sheet and HUD part without a
+result yet. Jobs run in parallel and the run can be resumed. Results whose
+painted shape strays too far from the original's are retried. Every job
+gets the approved look as a style reference:
+
+```
+python tools/artpack.py split out/export out/work --tile 384x224
+python tools/artpack.py split-sprites out/export out/work
+python tools/artpack.py split-hud out/export out/work
+python tools/codex_repaint.py out/work --style out/style --jobs 8
+python tools/artpack.py stitch out/export out/work packs/<name> --alpha key
+python tools/artpack.py stitch-sprites out/export out/work packs/<name>
+python tools/artpack.py stitch-hud out/export out/work packs/<name>
+```
+
+`out/style/` holds `fg.png`, `bg.png` and `sprites.png`: repainted examples
+that define the style.
+
 ## Checking nothing broke
 
 - Gameplay: `tools/emu/check.py` must still report 0 of 21 levels diverged.

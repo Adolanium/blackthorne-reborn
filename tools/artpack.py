@@ -260,7 +260,72 @@ def cmd_nearest(args):
                 img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST).save(os.path.join(out, name))
             elif name.endswith(".pal"):
                 shutil.copy(os.path.join(sprites, name), out)
+    hud = os.path.join(args.export, "hud")
+    if os.path.isdir(hud) and not args.levels:
+        out = os.path.join(args.pack, "hud")
+        os.makedirs(out, exist_ok=True)
+        for name in os.listdir(hud):
+            if name.endswith(".png"):
+                img = Image.open(os.path.join(hud, name))
+                img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST).save(os.path.join(out, name))
+            elif name.endswith(".pal"):
+                shutil.copy(os.path.join(hud, name), out)
     print(f"round-trip pack written to {args.pack}")
+
+
+# HUD -----------------------------------------------------------------------
+
+def cmd_split_hud(args):
+    """The HUD for the model: the side panel and the bottom bar as they are,
+    and the icons (with the selection frame) on one magenta sheet."""
+    src = os.path.join(args.export, "hud")
+    base = os.path.join(args.work, "hud")
+    os.makedirs(os.path.join(base, "in"), exist_ok=True)
+    os.makedirs(os.path.join(base, "out"), exist_ok=True)
+    for name in ("side.png", "bottom.png"):
+        img = Image.open(os.path.join(src, name)).convert("RGB")
+        img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST).save(os.path.join(base, "in", name))
+    icons = sorted(n for n in os.listdir(src) if n.startswith("icon_") or n == "selection.png")
+    pitch, cols = 32 + GAP, 6
+    rows = (len(icons) + cols - 1) // cols
+    sheet = Image.new("RGB", ((GAP + cols * pitch) * SCALE, (GAP + rows * pitch) * SCALE), KEY)
+    cells = []
+    for i, name in enumerate(icons):
+        x, y = GAP + (i % cols) * pitch, GAP + (i // cols) * pitch
+        icon = Image.open(os.path.join(src, name)).convert("RGBA").resize((32 * SCALE, 32 * SCALE), Image.NEAREST)
+        sheet.paste(icon, (x * SCALE, y * SCALE), mask=icon.getchannel("A"))
+        cells.append({"name": name, "x": x, "y": y})
+    sheet.save(os.path.join(base, "in", "icons.png"))
+    with open(os.path.join(base, "manifest.json"), "w") as f:
+        json.dump({"scale": SCALE, "icons": cells, "icons_size": [sheet.width // SCALE, sheet.height // SCALE]}, f, indent=1)
+    print(f"HUD: 2 panels and {len(icons)} icons in {base}")
+
+
+def cmd_stitch_hud(args):
+    src = os.path.join(args.export, "hud")
+    base = os.path.join(args.work, "hud")
+    with open(os.path.join(base, "manifest.json")) as f:
+        m = json.load(f)
+    out = os.path.join(args.pack, "hud")
+    os.makedirs(out, exist_ok=True)
+    write_pack_json(args.pack)
+    shutil.copy(os.path.join(src, "hud.pal"), out)
+    for name in ("side.png", "bottom.png"):
+        path = os.path.join(base, "out", name)
+        if os.path.exists(path):
+            orig = Image.open(os.path.join(src, name))
+            Image.open(path).convert("RGB").resize((orig.width * SCALE, orig.height * SCALE), Image.LANCZOS).convert("RGBA").save(os.path.join(out, name))
+            print(f"HUD {name}")
+    path = os.path.join(base, "out", "icons.png")
+    if os.path.exists(path):
+        w, h = m["icons_size"]
+        rgb = defringe(np.asarray(Image.open(path).convert("RGB").resize((w * SCALE, h * SCALE), Image.LANCZOS), dtype=np.float64))
+        s = 32 * SCALE
+        for c in m["icons"]:
+            cell = rgb[c["y"] * SCALE:c["y"] * SCALE + s, c["x"] * SCALE:c["x"] * SCALE + s]
+            alpha = np.rint(smooth_alpha(Image.open(os.path.join(src, c["name"])).convert("RGBA").getchannel("A"), (s, s))).astype(np.uint8)
+            Image.fromarray(np.dstack([np.rint(cell).clip(0, 255).astype(np.uint8), alpha]), "RGBA").save(os.path.join(out, c["name"]))
+        print(f"HUD: {len(m['icons'])} icons")
 
 
 # Sprites -------------------------------------------------------------------
@@ -423,6 +488,15 @@ def main():
     s.add_argument("export")
     s.add_argument("pack")
     s.set_defaults(func=cmd_check)
+    s = sub.add_parser("split-hud")
+    s.add_argument("export")
+    s.add_argument("work")
+    s.set_defaults(func=cmd_split_hud)
+    s = sub.add_parser("stitch-hud")
+    s.add_argument("export")
+    s.add_argument("work")
+    s.add_argument("pack")
+    s.set_defaults(func=cmd_stitch_hud)
     s = sub.add_parser("collect")
     s.add_argument("exe", help="blackthorne executable")
     s.add_argument("data", help="DATA.DAT")
