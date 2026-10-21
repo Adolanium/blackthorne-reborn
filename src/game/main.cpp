@@ -383,6 +383,81 @@ void enumerate_parts(const bt::Scene& scene, const std::filesystem::path& dir) {
 // graphics the game switches in later (doors, bridges, menu text). Writes
 // each as <dir>/<level>_<mmm>.png (16x16, the level's palette at load) and
 // the palette as <dir>/<level>.pal, for art packs (cells/).
+// Every state of every tile animation of the level (sub_18822's frames,
+// ds:1BFAh-1C5Ah), whether enabled now or later: each metatile showing an
+// animated tile is rendered with each frame and saved as
+// <dir>/<level>_k<key>.png (Renderer::metatile_key), like save_parts does
+// for the states it sees while playing.
+void save_anim_states(const bt::Scene& scene, std::size_t count, const std::filesystem::path& dir) {
+    const bt::Machine& live = *scene.machine;
+    const bt::DataSegment& ds = live.ds;
+    std::filesystem::create_directories(dir);
+    char level[8];
+    std::snprintf(level, sizeof level, "%X", ds.u16(0x1CA4));
+    auto copy = std::make_unique<bt::Machine>(live);
+    copy->tiles = live.tiles_at_load;
+    copy->tile_masks = live.tile_masks_at_load;
+    const bt::Scene s{copy.get(), scene.has_background, scene.palette};
+    std::set<std::uint64_t> done;
+    int written = 0;
+    for (int bp = 0; bp <= 0xE; bp += 2) {
+        const int frames = ds.u16(static_cast<std::uint16_t>(0x1C0A + bp));
+        const int tiles_n = ds.u16(static_cast<std::uint16_t>(0x1C3A + bp));
+        const std::uint16_t first = ds.u16(static_cast<std::uint16_t>(0x1C2A + bp));
+        if (frames <= 0 || frames > 64 || tiles_n <= 0 || tiles_n > 64) continue;
+        const int t0 = first / 64, t1 = t0 + tiles_n;
+        // The metatiles showing one of these tiles.
+        std::vector<int> users;
+        for (std::size_t mt = 0; mt < count; ++mt) {
+            const std::uint16_t at = static_cast<std::uint16_t>(ds.u16(bt::Machine::kMetatileTable) + mt * 8);
+            for (int k = 0; k < 4; ++k) {
+                const int t = (copy->map_u16(static_cast<std::uint16_t>(at + 2 * k)) >> 6) & 0x3FF;
+                if (t >= t0 && t < t1) {
+                    users.push_back(static_cast<int>(mt));
+                    break;
+                }
+            }
+        }
+        for (int f = 0; f < frames; ++f) {
+            copy->tiles = live.tiles_at_load;
+            copy->tile_masks = live.tile_masks_at_load;
+            std::uint16_t src = static_cast<std::uint16_t>(0x48 * tiles_n * f + ds.u16(static_cast<std::uint16_t>(0x1C4A + bp)));
+            std::uint16_t di = first, mi = static_cast<std::uint16_t>(first >> 3);
+            for (int n = 0; n < tiles_n * 8; ++n) {
+                copy->tile_masks[mi++ & 0x1FFF] = live.tile_anims[src++];
+                for (int k = 0; k < 8; ++k) copy->tiles[di++] = live.tile_anims[src++];
+            }
+            for (int mt : users) {
+                if (!bt::Renderer::metatile_animated(s, mt)) continue;  // this frame matches the load
+                const std::uint64_t key = bt::Renderer::metatile_key(s, mt);
+                if (!done.insert(key).second) continue;
+                bt::Image back, front, img;
+                bt::Renderer::render_metatile(s, mt, false, back);
+                bt::Renderer::render_metatile(s, mt, true, front);
+                img.resize(16, 16);
+                bool any = false;
+                for (std::size_t i = 0; i < img.pixels.size(); ++i) {
+                    const int fi = bt::Renderer::layer_index(front.pixels[i]), bi = bt::Renderer::layer_index(back.pixels[i]);
+                    const int c = fi >= 0 ? fi : bi;
+                    if (c < 0) {
+                        img.pixels[i] = 0u;
+                        continue;
+                    }
+                    any = true;
+                    auto ch = [&](int k) { return static_cast<std::uint32_t>((live.palette_at_load[static_cast<std::size_t>(c * 3 + k)] & 0x3F) * 255 / 63); };
+                    img.pixels[i] = 0xFF000000u | (ch(0) << 16) | (ch(1) << 8) | ch(2);
+                }
+                if (!any) continue;
+                char name[48];
+                std::snprintf(name, sizeof name, "%s_k%016llx.png", level, static_cast<unsigned long long>(key));
+                bt::write_png(dir / name, img);
+                ++written;
+            }
+        }
+    }
+    std::printf("level %s: %d animation states\n", level, written);
+}
+
 void save_metatiles(const bt::Scene& scene, std::size_t count, const std::filesystem::path& dir) {
     const bt::Machine& m = *scene.machine;
     const bt::DataSegment& ds = m.ds;
@@ -703,8 +778,11 @@ int main(int argc, char** argv) {
             const bool keep_running = handle_events();
             if (!parts_dir.empty()) save_parts(game->display(), parts_dir, t);
             if (!enumerate_dir.empty() && t == ticks_arg) enumerate_parts(game->display(), enumerate_dir);
-            if (!metatiles_dir.empty() && t == ticks_arg)
-                save_metatiles(game->display(), archive->resource(game->machine().ds.u16(0x1CEE + 0x25)).size() / 8, metatiles_dir);
+            if (!metatiles_dir.empty() && t == ticks_arg) {
+                const std::size_t count = archive->resource(game->machine().ds.u16(0x1CEE + 0x25)).size() / 8;
+                save_metatiles(game->display(), count, metatiles_dir);
+                save_anim_states(game->display(), count, metatiles_dir);
+            }
             if (godmode) {  // Kyle's health (ds:148Ah) back to the most it has been
                 bt::DataSegment& d = game->machine().ds;
                 const int hp = static_cast<std::int16_t>(d.u16(0x148A));
