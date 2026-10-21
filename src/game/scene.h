@@ -64,7 +64,7 @@ private:
     SDL_Renderer* sdl_;
     const bt::Renderer& base_;
     const bt::ArtPack& pack_;
-    std::map<std::string, std::array<int, 4>> pose_index_;  // name -> ox, oy, w, h (game pixels)
+    std::map<std::string, std::array<int, 5>> pose_index_;  // name -> ox, oy, w, h, cell (game pixels)
     int cell_ = 64, scale_ = 4;
 
     int level_ = -1;

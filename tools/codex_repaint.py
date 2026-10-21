@@ -83,6 +83,15 @@ Use your image generation tool to repaint the whole sheet in that style, then sa
 Kyle must look like the same man in every pose, faithful to the original art: a tall, muscular man with long straight jet-black hair falling past his shoulders, a stern tanned face with dark eyes and a strong jaw (no beard, no headband), a light grey sleeveless shirt, blue jeans worn through at the knees, black boots and a black belt, holding a pump-action shotgun (dark metal barrel, brown wooden grip). Keep his anatomy natural: arms attach at the shoulders with believable proportions, hands hold the shotgun firmly, the head sits on the neck without a seam. Keep every pose exactly where it is, at the same size and with the same silhouette and limb positions, because the game cuts each pose into pieces and animates them. Keep the magenta background flat magenta with clean edges. No text, no border.
 
 When out.png is saved, reply with only the word DONE.""",
+    "figures": """in.png is a sheet of poses of one character from the 1994 platformer Blackthorne (a hero, an enemy, a creature or a cutscene figure), upscaled from the original pixel art, each pose on a flat magenta (#ff00ff) background. style.png is a sheet of the hero, Kyle, already repainted in the target style.
+
+Use your image generation tool to repaint the whole sheet in that style, then save it as out.png in the current folder at exactly {w}x{h} pixels.
+
+{style}
+
+Repaint each figure faithfully: the same character in every pose, with the same body, clothing, armour, weapons, skin and colours as the original pixel art, only redrawn as detailed hand-painted art with natural anatomy (limbs attached naturally, heads on necks without seams, hands holding weapons firmly). If a pose is a flash, glow or magic effect, keep it as a smooth glowing silhouette of the same shape. Keep every pose exactly where it is, at the same size and with the same silhouette and limb positions, because the game shows and animates them in these exact places. Keep the magenta background flat magenta with clean edges. No text, no border.
+
+When out.png is saved, reply with only the word DONE.""",
     "cells": """in.png is a sheet of map cells from a 1994 side-scrolling platformer, upscaled from pixel art, each on a flat magenta (#ff00ff) background: the tiles the game swaps into a level while playing (opened doors and gates, bridges, switches, broken walls, menu text and similar), each 16x16 game pixels. style.png shows the approved style of the game's repainted levels.
 
 Use your image generation tool to repaint the whole sheet in that style, then save it as out.png in the current folder at exactly {w}x{h} pixels.
@@ -143,7 +152,7 @@ def shape_ok(src, out, kind):
     if not a.any():
         return True, 1.0
     iou = (a & b).sum() / max(1, (a | b).sum())
-    return iou >= (MIN_SHAPE if MIN_SHAPE is not None else 0.65 if kind == "poses" else 0.8 if kind in ("sprites", "hud", "font", "cells") else 0.6), iou
+    return iou >= (MIN_SHAPE if MIN_SHAPE is not None else 0.65 if kind in ("poses", "figures") else 0.8 if kind in ("sprites", "hud", "font", "cells") else 0.6), iou
 
 
 def jobs_in(work, only):
@@ -154,7 +163,7 @@ def jobs_in(work, only):
         if level == "poses":
             base = os.path.join(work, level)
             for name in sorted(os.listdir(os.path.join(base, "in"))):
-                jobs.append(("poses", base, name))
+                jobs.append(("figures" if name.startswith("e_") else "poses", base, name))
             continue
         if level == "cells":
             base = os.path.join(work, level)
@@ -214,7 +223,7 @@ def run_job(job, args):
     w, h = Image.open(src).size
     label = os.path.relpath(src, args.work)
     jobdir = os.path.join(args.work, "_jobs", label.replace(os.sep, "_").replace(".png", ""))
-    style_ref = os.path.join(args.style, {"fg": "fg.png", "bg": "bg.png", "sprites": "sprites.png", "hud": "fg.png", "font": "fg.png", "cells": "fg.png", "poses": "sprites.png"}[kind])
+    style_ref = os.path.join(args.style, {"fg": "fg.png", "bg": "bg.png", "sprites": "sprites.png", "hud": "fg.png", "font": "fg.png", "cells": "fg.png", "poses": "sprites.png", "figures": "sprites.png"}[kind])
     for attempt in range(1, args.tries + 1):
         shutil.rmtree(jobdir, ignore_errors=True)
         os.makedirs(jobdir)

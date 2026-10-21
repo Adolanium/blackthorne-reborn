@@ -506,39 +506,60 @@ POSE_CELL = 64  # game pixels per pose cell on a sheet (256 at 4x)
 
 
 def cmd_split_poses(args):
-    """Kyle's assembled poses (blackthorne --poses) on magenta sheets of
-    4x3 cells, for repainting him as whole figures."""
+    """Assembled poses (blackthorne --poses) on magenta sheets of 4x3 cells,
+    for repainting characters as whole figures. Sheets made before stay
+    (they may be painted); new poses go on new sheets, one character (sprite
+    bank) per sheet, in 64- or 96-pixel cells by their size. Sheets of the
+    first run (Kyle) are named p_*, later ones e_<bank>_*."""
     src = args.poses
-    rows = [line.rstrip("\n").split("\t") for line in open(os.path.join(src, "poses.tsv"))]
     base = os.path.join(args.work, "poses")
     os.makedirs(os.path.join(base, "in"), exist_ok=True)
     os.makedirs(os.path.join(base, "out"), exist_ok=True)
+    sheets, done = [], set()
+    manifest = os.path.join(base, "manifest.json")
+    if os.path.exists(manifest):
+        with open(manifest) as f:
+            sheets = json.load(f)["sheets"]
+        done = {c["pose"] for sh in sheets for c in sh["cells"]}
+    first_run = not sheets
+    groups = {}
+    for line in open(os.path.join(src, "poses.tsv")):
+        f = line.rstrip("\n").split("\t")
+        if len(f) < 4 or f[0] in done:
+            continue
+        done.add(f[0])
+        bank = f[4] if len(f) > 4 else "0"
+        w, h = int(f[1]), int(f[2])
+        cell = POSE_CELL if w <= POSE_CELL and h <= POSE_CELL else 96 if w <= 96 and h <= 96 else 0
+        if cell:
+            groups.setdefault((bank, cell), []).append(f)
     cols, per = 4, 12
-    sheets = []
-    for first in range(0, len(rows), per):
-        batch = rows[first:first + per]
-        n_rows = (len(batch) + cols - 1) // cols
-        sheet = Image.new("RGB", (cols * POSE_CELL * SCALE, n_rows * POSE_CELL * SCALE), KEY)
-        cells = []
-        for i, (name, w, h, sig) in enumerate(batch):
-            w, h = int(w), int(h)
-            if w > POSE_CELL or h > POSE_CELL:
-                continue
-            cx = (i % cols) * POSE_CELL + (POSE_CELL - w) // 2
-            cy = (i // cols) * POSE_CELL + (POSE_CELL - h)  # standing on the cell's floor
-            img = Image.open(os.path.join(src, name + ".png")).convert("RGBA").resize((w * SCALE, h * SCALE), Image.NEAREST)
-            sheet.paste(img, (cx * SCALE, cy * SCALE), mask=img.getchannel("A"))
-            parts = []
-            for p in sig.strip(";").split(";"):
-                key, size, x, y, mirror = p.split(",")
-                parts.append({"key": key, "size": int(size), "x": int(x), "y": int(y), "mirror": mirror == "1"})
-            cells.append({"pose": name, "x": cx, "y": cy, "w": w, "h": h, "parts": parts})
-        sname = f"p_{first // per:03d}.png"
-        sheet.save(os.path.join(base, "in", sname))
-        sheets.append({"name": sname, "width": cols * POSE_CELL, "height": n_rows * POSE_CELL, "cells": cells})
-    with open(os.path.join(base, "manifest.json"), "w") as f:
+    count = 0
+    for (bank, cell), rows in sorted(groups.items()):
+        for first in range(0, len(rows), per):
+            batch = rows[first:first + per]
+            n_rows = (len(batch) + cols - 1) // cols
+            sheet = Image.new("RGB", (cols * cell * SCALE, n_rows * cell * SCALE), KEY)
+            cells = []
+            for i, f in enumerate(batch):
+                name, w, h, sig = f[0], int(f[1]), int(f[2]), f[3]
+                cx = (i % cols) * cell + (cell - w) // 2
+                cy = (i // cols) * cell + (cell - h)  # standing on the cell's floor
+                img = Image.open(os.path.join(src, name + ".png")).convert("RGBA").resize((w * SCALE, h * SCALE), Image.NEAREST)
+                sheet.paste(img, (cx * SCALE, cy * SCALE), mask=img.getchannel("A"))
+                parts = []
+                for q in sig.strip(";").split(";"):
+                    key, size, x, y, mirror = q.split(",")
+                    parts.append({"key": key, "size": int(size), "x": int(x), "y": int(y), "mirror": mirror == "1"})
+                cells.append({"pose": name, "x": cx, "y": cy, "w": w, "h": h, "parts": parts})
+            n = sum(1 for sh in sheets if sh["name"].startswith(f"e_{bank}_"))
+            sname = f"p_{len(sheets):03d}.png" if first_run else f"e_{bank}_{n:02d}.png"
+            sheet.save(os.path.join(base, "in", sname))
+            sheets.append({"name": sname, "cell": cell, "bank": bank, "width": cols * cell, "height": n_rows * cell, "cells": cells})
+            count += len(cells)
+    with open(manifest, "w") as f:
         json.dump({"scale": SCALE, "sheets": sheets}, f, indent=1)
-    print(f"{len(rows)} poses on {len(sheets)} sheets in {base}")
+    print(f"{count} new poses; {len(sheets)} sheets in {base}")
 
 
 def cmd_export_poses(args):
@@ -546,8 +567,8 @@ def cmd_export_poses(args):
     cell (64x64 game pixels at 4x) with the painting's own soft outline
     (everything the model didn't leave magenta), so hair and limbs may
     reach past the original silhouette. Writes <pack>/poses/<name>.png and
-    <pack>/poses/poses.json: name -> [ox, oy, w, h], the pose box's place
-    in the cell (game pixels)."""
+    <pack>/poses/poses.json: name -> [ox, oy, w, h, cell], the pose box's
+    place in its square cell (game pixels)."""
     base = os.path.join(args.work, "poses")
     with open(os.path.join(base, "manifest.json")) as f:
         m = json.load(f)
@@ -562,15 +583,16 @@ def cmd_export_poses(args):
                          dtype=np.float64)
         alpha = key_alpha(raw)
         rgb = defringe(raw.copy(), passes=24)
-        s = POSE_CELL * SCALE
+        cell = sheet.get("cell", POSE_CELL)
+        s = cell * SCALE
         for i, c in enumerate(sheet["cells"]):
-            # The cell is found from the pose's place: cells are POSE_CELL apart.
-            cx0, cy0 = (c["x"] // POSE_CELL) * POSE_CELL, (c["y"] // POSE_CELL) * POSE_CELL
+            # The cell is found from the pose's place: cells are `cell` apart.
+            cx0, cy0 = (c["x"] // cell) * cell, (c["y"] // cell) * cell
             y0, x0 = cy0 * SCALE, cx0 * SCALE
             a = alpha[y0:y0 + s, x0:x0 + s]
             img = np.dstack([np.rint(rgb[y0:y0 + s, x0:x0 + s]).clip(0, 255), np.rint(a * 255)]).astype(np.uint8)
             Image.fromarray(img, "RGBA").save(os.path.join(out, c["pose"] + ".png"))
-            index[c["pose"]] = [c["x"] - cx0, c["y"] - cy0, c["w"], c["h"]]
+            index[c["pose"]] = [c["x"] - cx0, c["y"] - cy0, c["w"], c["h"], cell]
     with open(os.path.join(out, "poses.json"), "w") as f:
         json.dump({"cell": POSE_CELL, "scale": SCALE, "poses": index}, f)
     print(f"poses: {len(index)} whole figures in {out}")

@@ -77,9 +77,11 @@ SceneRenderer::SceneRenderer(SDL_Renderer* sdl, const bt::Renderer& base, const 
     const std::regex cell("\"cell\"\\s*:\\s*(\\d+)");
     std::smatch cm;
     if (std::regex_search(json, cm, cell)) cell_ = std::stoi(cm[1]);
-    const std::regex entry("\"(pose_[0-9a-f]+)\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\]");
+    const std::regex entry(
+        "\"(pose_[0-9a-f]+)\"\\s*:\\s*\\[\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*(?:,\\s*(\\d+)\\s*)?\\]");
     for (auto it = std::sregex_iterator(json.begin(), json.end(), entry); it != std::sregex_iterator(); ++it)
-        pose_index_[(*it)[1]] = {std::stoi((*it)[2]), std::stoi((*it)[3]), std::stoi((*it)[4]), std::stoi((*it)[5])};
+        pose_index_[(*it)[1]] = {std::stoi((*it)[2]), std::stoi((*it)[3]), std::stoi((*it)[4]), std::stoi((*it)[5]),
+                                 (*it)[6].matched ? std::stoi((*it)[6]) : cell_};
 }
 
 SceneRenderer::~SceneRenderer() {
@@ -334,7 +336,7 @@ void SceneRenderer::draw(const bt::Scene& scene, const SDL_FRect& dst, int extra
         for (const PoseMatch& pm : poses) {
             if (pm.priority != priority) continue;
             const auto& idx = pose_index_[pm.name];
-            const float cell = static_cast<float>(cell_);
+            const float cell = static_cast<float>(idx[4]);
             const float left = pm.flip ? static_cast<float>(pm.x1 + idx[0]) - cell : static_cast<float>(pm.x0 - idx[0]);
             const auto [sx, sy] = world(left, static_cast<float>(pm.y0 - idx[1]));
             draw_tex(pose_texture(pm.name), sx, sy, cell, cell, pm.flip);
