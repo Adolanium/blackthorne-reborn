@@ -10,6 +10,8 @@ cbuffer Params : register(b0, space3)
     float4 ambient;    // rgb: how bright unlit areas are; a: light strength
     float4 glow;       // rgb: glow tint; a: glow strength
     float4 misc;       // x: time (seconds), y: vignette, z: haze, w: flicker
+    float4 view;       // xy: camera in game pixels (fog moves with the world); zw: one frame texel in UV
+    float4 relief;     // x: relief strength (light wrapping around the painted shapes)
 };
 
 Texture2D u_frame : register(t0, space2);
@@ -63,13 +65,34 @@ PSOutput main(PSInput input)
     float3 light = u_light.Sample(s_light, uv).rgb * ambient.a * flick;
     float3 g = u_glow.Sample(s_glow, uv).rgb * glow.a * flick;
 
+    // Relief: the painting's shading as a height, the light map's slope as
+    // the direction light comes from. Surfaces facing a fire catch more of
+    // its light, those facing away less.
+    float2 px = view.zw * 2.0;
+    float hl = dot(u_frame.Sample(s_frame, uv - float2(px.x, 0)).rgb, float3(0.3, 0.59, 0.11));
+    float hr = dot(u_frame.Sample(s_frame, uv + float2(px.x, 0)).rgb, float3(0.3, 0.59, 0.11));
+    float hu = dot(u_frame.Sample(s_frame, uv - float2(0, px.y)).rgb, float3(0.3, 0.59, 0.11));
+    float hd = dot(u_frame.Sample(s_frame, uv + float2(0, px.y)).rgb, float3(0.3, 0.59, 0.11));
+    float3 n = normalize(float3((hl - hr) * 4.0, (hu - hd) * 4.0, 1.0));
+    float2 lx = view.zw * 24.0;
+    float ll = dot(u_light.Sample(s_light, uv - float2(lx.x, 0)).rgb, 1.0);
+    float lr = dot(u_light.Sample(s_light, uv + float2(lx.x, 0)).rgb, 1.0);
+    float lu = dot(u_light.Sample(s_light, uv - float2(0, lx.y)).rgb, 1.0);
+    float ld = dot(u_light.Sample(s_light, uv + float2(0, lx.y)).rgb, 1.0);
+    float3 L = normalize(float3(lr - ll, ld - lu, 0.35));
+    float facing = saturate(dot(n, -L) * 0.5 + 0.5);
+    light *= lerp(1.0, 0.35 + 1.3 * facing, relief.x);
+
     // Unlit areas fall to the ambient level; light adds back colour where
     // fires and flashes are, without blowing out what's already bright.
     float3 lit = c.rgb * (ambient.rgb + light);
     lit += g * glow.rgb;
 
     // Haze: faint, slowly drifting, darker towards the bottom.
-    float h = noise(p * float2(3.0, 2.0) + float2(t * 0.05, t * 0.02)) * misc.z;
+    // Two fog layers that move with the world at their own depth.
+    float2 w = view.xy / 256.0;
+    float h = (noise(p * float2(3.0, 2.0) + w * 0.6 + float2(t * 0.05, t * 0.02)) * 0.6 +
+               noise(p * float2(6.0, 4.0) + w * 1.2 + float2(-t * 0.08, t * 0.03)) * 0.4) * misc.z;
     lit = lerp(lit, float3(0.10, 0.11, 0.16), h * (0.4 + 0.6 * p.y));
 
     // Vignette.

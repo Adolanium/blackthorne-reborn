@@ -66,6 +66,52 @@ void to_image(const std::vector<float>& img, int w, int h, float gain, Image& ou
 
 }  // namespace
 
+float Embers::random() {
+    seed_ ^= seed_ << 13;
+    seed_ ^= seed_ >> 17;
+    seed_ ^= seed_ << 5;
+    return static_cast<float>(seed_ & 0xFFFFFF) / 16777216.0f;
+}
+
+void Embers::update(const Image& emission, int play_x, int view_x, int cam_y, float dt) {
+    // Move, flicker out, drift.
+    for (Particle& p : parts_) {
+        p.age += dt;
+        p.vx += (random() - 0.5f) * 30.0f * dt;
+        p.vy -= 6.0f * dt;  // hot air rises a little faster
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+    }
+    parts_.erase(std::remove_if(parts_.begin(), parts_.end(), [](const Particle& p) { return p.age >= p.life; }), parts_.end());
+    // Spawn: each fire pixel gives off embers at a steady rate.
+    fire_.clear();
+    for (int y = 0; y < emission.height; ++y)
+        for (int x = 0; x < emission.width; ++x) {
+            const std::uint32_t c = emission.pixels[static_cast<std::size_t>(y) * emission.width + x];
+            if ((c >> 24) < 140) continue;
+            const int r = (c >> 16) & 0xFF, b = c & 0xFF;
+            if (r < b + 60) continue;  // fire only, not white flashes
+            fire_.push_back(y * emission.width + x);
+        }
+    if (fire_.empty()) return;
+    budget_ += static_cast<float>(fire_.size()) * 0.35f * dt;
+    while (budget_ >= 1.0f && parts_.size() < 500) {
+        budget_ -= 1.0f;
+        const int at = fire_[static_cast<std::size_t>(random() * static_cast<float>(fire_.size())) % fire_.size()];
+        const int x = at % emission.width, y = at / emission.width;
+        Particle p{};
+        p.x = static_cast<float>(x - play_x + view_x) + (random() - 0.5f) * 2.0f;
+        p.y = static_cast<float>(y + cam_y);
+        p.vx = (random() - 0.5f) * 10.0f;
+        p.vy = -10.0f - random() * 18.0f;
+        p.life = 0.8f + random() * 1.6f;
+        p.size = 0.8f + random() * 1.0f;
+        p.colour = emission.pixels[static_cast<std::size_t>(at)];
+        parts_.push_back(p);
+    }
+    budget_ = std::min(budget_, 1.0f);
+}
+
 void build_light_maps(const Image& emission, LightMaps& out) {
     int w = 0, h = 0;
     std::vector<float> img;

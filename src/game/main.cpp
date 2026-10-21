@@ -103,6 +103,31 @@ public:
     // false if the pass can't run.
     bool prepare(const bt::HdRenderer& hd, int level, int frame_w, int frame_h, int scale, double seconds) {
         if (!available()) return false;
+        // Embers: world-anchored, reset on a new level.
+        if (level != level_) embers_.clear();
+        level_ = level;
+        // Headless runs go faster than real time: one game frame per draw.
+        const float dt = fixed_dt > 0 ? fixed_dt : last_ > 0 ? static_cast<float>(std::clamp(seconds - last_, 0.0, 0.1)) : 0.0f;
+        last_ = seconds;
+        embers_.update(hd.emission(), hd.playfield_x(), hd.view_x(), hd.view_y(), dt);
+        sparks_.clear();
+        for (const bt::Particle& e : embers_.particles()) {
+            const float x = static_cast<float>(hd.playfield_x()) + e.x - static_cast<float>(hd.view_x());
+            const float y = e.y - static_cast<float>(hd.view_y());
+            if (x < static_cast<float>(hd.playfield_x()) || x >= static_cast<float>(hd.playfield_x() + hd.playfield_w()) || y < 0 ||
+                y >= static_cast<float>(bt::Renderer::kHeight))
+                continue;
+            // Hot when fresh (yellow-white), cooling to the fire's own colour.
+            const float t = e.age / e.life, heat = std::clamp(1.0f - t * 2.0f, 0.0f, 1.0f);
+            auto mix = [&](int shift, float hot) {
+                const float c = static_cast<float>((e.colour >> shift) & 0xFF);
+                return static_cast<std::uint32_t>(std::clamp(c + (hot - c) * heat, 0.0f, 255.0f)) << shift;
+            };
+            const std::uint32_t colour = mix(16, 255.0f) | mix(8, 225.0f) | mix(0, 140.0f);
+            const float fade = 1.0f - t;
+            sparks_.push_back({x * static_cast<float>(scale), y * static_cast<float>(scale), e.size * static_cast<float>(scale) * 3.5f, colour,
+                               std::min(1.0f, fade * 1.6f)});
+        }
         bt::build_light_maps(hd.emission(), maps_);
         const bt::Image& ui = hd.ui_mask();
         if (!light_ || light_->w != maps_.light.width || light_->h != maps_.light.height || glow_->w != maps_.glow.width ||
@@ -152,10 +177,22 @@ public:
         std::copy_n(amb, 4, p.ambient);
         std::copy_n(gl, 4, p.glow);
         std::copy_n(misc, 4, p.misc);
+        const float view[4] = {static_cast<float>(hd.view_x()), static_cast<float>(hd.view_y()), 1.0f / static_cast<float>(frame_w),
+                               1.0f / static_cast<float>(frame_h)};
+        const float relief[4] = {0.85f, 0, 0, 0};
+        std::copy_n(view, 4, p.view);
+        std::copy_n(relief, 4, p.relief);
         SDL_SetGPURenderStateFragmentUniforms(state_, 0, &p, sizeof p);
         return true;
     }
     SDL_GPURenderState* state() const { return state_; }
+    float fixed_dt = 0;  // > 0: seconds per drawn frame instead of the clock
+    struct Spark {
+        float x, y, size;  // centre and diameter in frame pixels
+        std::uint32_t colour;
+        float alpha;
+    };
+    const std::vector<Spark>& sparks() const { return sparks_; }
 
 private:
     void release() {
@@ -173,6 +210,10 @@ private:
     SDL_Texture *light_ = nullptr, *glow_ = nullptr, *ui_ = nullptr;
     SDL_GPURenderState* state_ = nullptr;
     bt::LightMaps maps_;
+    bt::Embers embers_;
+    std::vector<Spark> sparks_;
+    int level_ = -1;
+    double last_ = 0;
 };
 
 // How the 320x240 frame reaches the window (F8 cycles).
@@ -187,10 +228,11 @@ class Display {
 public:
     explicit Display(SDL_Renderer* sdl) : sdl_(sdl) {}
     ~Display() {
-        for (SDL_Texture* t : {source_, prescaled_}) if (t) SDL_DestroyTexture(t);
+        for (SDL_Texture* t : {source_, prescaled_, dot_}) if (t) SDL_DestroyTexture(t);
     }
     Filter filter = Filter::Sharp;
     SDL_GPURenderState* effect = nullptr;  // a lighting pass for the final draw (set per frame)
+    const std::vector<Lighting::Spark>* sparks = nullptr;  // embers drawn over it (frame pixels)
 
     void present(const bt::Image& frame, bool flip = true) {
         const bt::Image* image = &frame;
@@ -233,11 +275,39 @@ public:
         if (effect) SDL_SetGPURenderState(sdl_, effect);
         SDL_RenderTexture(sdl_, shown, nullptr, &dst);
         if (effect) SDL_SetGPURenderState(sdl_, nullptr);
+        if (sparks && !sparks->empty()) draw_sparks(dst, frame.width);
         if (filter == Filter::Crt) scanlines(dst, frame.height);
         if (flip) SDL_RenderPresent(sdl_);
     }
 
 private:
+    // Embers as soft additive glows.
+    void draw_sparks(const SDL_FRect& dst, int frame_w) {
+        if (!dot_) {
+            constexpr int n = 32;
+            std::vector<std::uint32_t> px(n * n);
+            for (int y = 0; y < n; ++y)
+                for (int x = 0; x < n; ++x) {
+                    const float dx = (static_cast<float>(x) + 0.5f) / n * 2 - 1, dy = (static_cast<float>(y) + 0.5f) / n * 2 - 1;
+                    const float d = std::sqrt(dx * dx + dy * dy);
+                    const float a = std::clamp(1.0f - d, 0.0f, 1.0f);
+                    const float core = std::clamp(1.0f - d * 2.5f, 0.0f, 1.0f);  // a bright core in a soft halo
+                    px[static_cast<std::size_t>(y * n + x)] = (static_cast<std::uint32_t>(std::min(1.0f, a * a * 0.6f + core) * 255.0f) << 24) | 0xFFFFFFu;
+                }
+            dot_ = SDL_CreateTexture(sdl_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, n, n);
+            SDL_UpdateTexture(dot_, nullptr, px.data(), n * 4);
+            SDL_SetTextureBlendMode(dot_, SDL_BLENDMODE_ADD);
+        }
+        const float k = dst.w / static_cast<float>(frame_w);
+        for (const Lighting::Spark& s : *sparks) {
+            SDL_SetTextureColorMod(dot_, static_cast<Uint8>(s.colour >> 16), static_cast<Uint8>(s.colour >> 8), static_cast<Uint8>(s.colour));
+            SDL_SetTextureAlphaModFloat(dot_, s.alpha);
+            const float size = s.size * k;
+            const SDL_FRect r{dst.x + s.x * k - size / 2, dst.y + s.y * k - size / 2, size, size};
+            SDL_RenderTexture(sdl_, dot_, nullptr, &r);
+        }
+    }
+    SDL_Texture* dot_ = nullptr;
     SDL_Texture* fit(SDL_Texture* t, int w, int h, SDL_TextureAccess access) {
         if (t && t->w == w && t->h == h) return t;
         if (t) SDL_DestroyTexture(t);
@@ -844,12 +914,14 @@ int main(int argc, char** argv) {
     // One frame of the picture: HD with the art pack when there is one and it
     // is on, otherwise the original 320x240. HD frames always use sharp scaling.
     auto lighting = std::make_unique<Lighting>(sdl, gpu);
+    if (!shot.empty()) lighting->fixed_dt = 1.0f / 35.0f;
     auto draw = [&](bt::Image& out) {
         display->effect = nullptr;
+        display->sparks = nullptr;
         if (pack && settings.hd) {
             hd.render_screen(game->display(), out, render_opt);
             if (settings.effects && lighting->prepare(hd, game->level_id(), out.width, out.height, hd.scale(), static_cast<double>(SDL_GetTicks()) / 1000.0))
-                display->effect = lighting->state();
+                display->effect = lighting->state(), display->sparks = &lighting->sparks();
             const Filter keep = display->filter;
             display->filter = Filter::Sharp;
             return keep;

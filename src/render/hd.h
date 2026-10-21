@@ -118,6 +118,8 @@ public:
     // Where text and dialogue boxes are (opaque white), same size: kept unlit.
     const Image& ui_mask() const { return ui_; }
     int playfield_x() const { return play_x_; }
+    int view_x() const { return layers_.view_x; }  // the world position the playfield shows (game pixels)
+    int view_y() const { return layers_.cam_y; }
     int playfield_w() const { return play_w_; }
 
 private:

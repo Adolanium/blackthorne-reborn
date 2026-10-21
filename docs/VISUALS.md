@@ -228,9 +228,17 @@ renderer):
 - Without Direct3D 12 or `dxc` (or with the classic art) the game draws as
   before.
 
-Next: normal maps for the paintings (light wrapping around rocks), embers
-and sparks, fog layers with parallax, light shafts, and SPIR-V shaders so
-the pass runs on Vulkan too.
+- **Relief.** The pass reads the painting's shading as a height and the
+  light map's slope as the direction light comes from, so surfaces facing
+  a fire catch more of its light.
+- **Embers** (`Embers`, `src/render/effects.cpp`) rise from every fire
+  pixel at a steady rate, in world coordinates so they scroll with the
+  level; hot yellow-white when fresh, cooling to the fire's colour. Drawn
+  as soft additive glows after the lit frame.
+- **Fog**: two noise layers that move with the camera at their own depth.
+
+Next: light shafts, dust on landings, a colour grade per level, and SPIR-V
+shaders so the pass runs on Vulkan too.
 
 ## Checking nothing broke
 
