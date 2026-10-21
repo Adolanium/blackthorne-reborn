@@ -209,21 +209,27 @@ def fill_gaps(out, original, reach=24):
     out[done, 3] = 255
 
 
-def match_light(out, original, radius=2):
-    """Scales the painting's local brightness to the original's (averaged
-    over about `radius` game pixels of what each draws), so dark areas of
-    the original stay dark: the model tends to brighten them, and the gaps
-    between dark tiles then show as black patches."""
+def match_light(out, original, near=2, wide=8):
+    """Scales the painting's local brightness to the original's, so the
+    level keeps its lighting: the model tends to brighten dark areas, and
+    gaps between dark tiles then show as black blocks. Where the original
+    is near-black the match is tight (over `near` game pixels); elsewhere it
+    is broad (`wide`), so the painting keeps its own detail."""
     def lum(rgba):
         return 0.30 * rgba[:, :, 0] + 0.59 * rgba[:, :, 1] + 0.11 * rgba[:, :, 2], rgba[:, :, 3] / 255.0
     w1, h1 = original.size
     o, oa = lum(np.asarray(original, dtype=np.float64))
     small = np.asarray(Image.fromarray(np.rint(out).clip(0, 255).astype(np.uint8), "RGBA").resize((w1, h1), Image.BOX), dtype=np.float64)
     p, pa = lum(small)
-    o_mean = blur(o * oa, radius) / np.maximum(blur(oa, radius), 1e-3)
-    p_mean = blur(p * pa, radius) / np.maximum(blur(pa, radius), 1e-3)
-    ratio = np.clip((o_mean + 3.0) / (p_mean + 3.0), 0.05, 1.25)
-    big = np.asarray(Image.fromarray(ratio.astype(np.float32), "F").resize((out.shape[1], out.shape[0]), Image.BILINEAR))
+    def ratio(radius):
+        o_mean = blur(o * oa, radius) / np.maximum(blur(oa, radius), 1e-3)
+        p_mean = blur(p * pa, radius) / np.maximum(blur(pa, radius), 1e-3)
+        return np.clip((o_mean + 3.0) / (p_mean + 3.0), 0.05, 2.0), o_mean
+    tight, _ = ratio(near)
+    broad, o_wide = ratio(wide)
+    dark = np.clip((24.0 - o_wide) / 16.0, 0.0, 1.0)  # 1 where the original is near-black
+    r = tight * dark + broad * (1.0 - dark)
+    big = np.asarray(Image.fromarray(r.astype(np.float32), "F").resize((out.shape[1], out.shape[0]), Image.BILINEAR))
     return np.clip(out[:, :, :3] * big[:, :, None], 0, 255)
 
 
