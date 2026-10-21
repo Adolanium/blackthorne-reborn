@@ -93,6 +93,7 @@ HUD_PARTS = {
                   "Each icon keeps its position, size and outline on the sheet; keep the magenta background flat magenta. "),
 }
 
+MIN_SHAPE = None  # --min-shape
 print_lock = threading.Lock()
 
 
@@ -115,7 +116,7 @@ def shape_ok(src, out, kind):
     if not a.any():
         return True, 1.0
     iou = (a & b).sum() / max(1, (a | b).sum())
-    return iou >= (0.8 if kind in ("sprites", "hud") else 0.6), iou
+    return iou >= (MIN_SHAPE if MIN_SHAPE is not None else 0.8 if kind in ("sprites", "hud") else 0.6), iou
 
 
 def jobs_in(work, only):
@@ -179,6 +180,8 @@ def run_job(job, args):
         shutil.copy(style_ref, os.path.join(jobdir, "style.png"))
         what, extra = HUD_PARTS.get(name, ("", ""))
         prompt = PROMPTS[kind].format(w=w, h=h, style=STYLE, what=what, extra=extra)
+        if args.note:
+            prompt = prompt.replace("When out.png is saved", args.note + "\n\nWhen out.png is saved")
         with open(os.path.join(jobdir, "prompt.txt"), "w") as f:
             f.write(prompt)
         start = time.time()
@@ -232,12 +235,22 @@ def main():
     p.add_argument("--tries", type=int, default=3)
     p.add_argument("--timeout", type=int, default=1200, help="seconds per Codex run")
     p.add_argument("--codex", default="codex")
+    p.add_argument("--min-shape", type=float, help="the least overlap of painted and original shape to accept")
+    p.add_argument("--note", help="an extra instruction added to every prompt")
+    p.add_argument("--redo", help="comma-separated input names (like 0_576.png) to repaint even if done")
     args = p.parse_args()
+    global MIN_SHAPE
+    MIN_SHAPE = args.min_shape
     only = {o.strip().upper() if o.strip() != "sprites" else "sprites" for o in args.only.split(",")} if args.only else None
     for name in ("fg.png", "bg.png", "sprites.png"):
         if not os.path.exists(os.path.join(args.style, name)):
             sys.exit(f"missing {os.path.join(args.style, name)}")
     every = jobs_in(args.work, only)
+    if args.redo:
+        names = {n.strip() for n in args.redo.split(",")}
+        for j in every:
+            if j[2] in names and os.path.exists(os.path.join(j[1], "out", j[2])):
+                os.remove(os.path.join(j[1], "out", j[2]))
     share_duplicates(every)
     seen, jobs = set(), []
     for j in every:

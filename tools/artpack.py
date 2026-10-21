@@ -216,7 +216,10 @@ def defringe(rgb, passes=12):
 def cmd_stitch(args):
     write_pack_json(args.pack)
     done = 0
+    wanted = {w.strip().upper() for w in args.levels.split(",")} if getattr(args, "levels", None) else None
     for level in sorted(os.listdir(args.work)):
+        if wanted and level not in wanted:
+            continue
         for layer in LAYERS:
             base = os.path.join(args.work, level, layer)
             manifest = os.path.join(base, "manifest.json")
@@ -536,6 +539,7 @@ def main():
                    help="transparency from the original's shape, or from the painting (not magenta)")
     s.add_argument("--no-match-light", dest="match_light", action="store_false",
                    help="keep the painting's own brightness")
+    s.add_argument("--levels", help="only these level ids (comma separated)")
     s.set_defaults(func=cmd_stitch)
     s = sub.add_parser("nearest")
     s.add_argument("export")
