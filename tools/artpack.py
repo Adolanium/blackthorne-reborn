@@ -159,7 +159,7 @@ def blur(a, radius):
     return a
 
 
-def match_light(out, original, radius=12):
+def match_light(out, original, radius=4):
     """Scales the painting's local brightness to the original's (averaged
     over about `radius` game pixels of what each draws), so dark areas of
     the original stay dark: the model tends to brighten them, and the gaps
@@ -172,7 +172,7 @@ def match_light(out, original, radius=12):
     p, pa = lum(small)
     o_mean = blur(o * oa, radius) / np.maximum(blur(oa, radius), 1e-3)
     p_mean = blur(p * pa, radius) / np.maximum(blur(pa, radius), 1e-3)
-    ratio = np.clip((o_mean + 4.0) / (p_mean + 4.0), 0.25, 1.25)
+    ratio = np.clip((o_mean + 4.0) / (p_mean + 4.0), 0.1, 1.25)
     big = np.asarray(Image.fromarray(ratio.astype(np.float32), "F").resize((out.shape[1], out.shape[0]), Image.BILINEAR))
     return np.clip(out[:, :, :3] * big[:, :, None], 0, 255)
 
