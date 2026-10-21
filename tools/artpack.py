@@ -150,6 +150,33 @@ def feather(w, h, rect, layer_w, layer_h, overlap):
     return col, row
 
 
+def blur(a, radius):
+    """Box blur (twice, close to Gaussian) of a 2D array."""
+    for _ in range(2):
+        for axis in (0, 1):
+            c = np.cumsum(np.pad(a, [(radius + 1, radius) if i == axis else (0, 0) for i in range(2)], mode="edge"), axis=axis)
+            a = (np.take(c, range(2 * radius + 1, c.shape[axis]), axis=axis) - np.take(c, range(0, c.shape[axis] - 2 * radius - 1), axis=axis)) / (2 * radius + 1)
+    return a
+
+
+def match_light(out, original, radius=12):
+    """Scales the painting's local brightness to the original's (averaged
+    over about `radius` game pixels of what each draws), so dark areas of
+    the original stay dark: the model tends to brighten them, and the gaps
+    between dark tiles then show as black patches."""
+    def lum(rgba):
+        return 0.30 * rgba[:, :, 0] + 0.59 * rgba[:, :, 1] + 0.11 * rgba[:, :, 2], rgba[:, :, 3] / 255.0
+    w1, h1 = original.size
+    o, oa = lum(np.asarray(original, dtype=np.float64))
+    small = np.asarray(Image.fromarray(np.rint(out).clip(0, 255).astype(np.uint8), "RGBA").resize((w1, h1), Image.BOX), dtype=np.float64)
+    p, pa = lum(small)
+    o_mean = blur(o * oa, radius) / np.maximum(blur(oa, radius), 1e-3)
+    p_mean = blur(p * pa, radius) / np.maximum(blur(pa, radius), 1e-3)
+    ratio = np.clip((o_mean + 4.0) / (p_mean + 4.0), 0.25, 1.25)
+    big = np.asarray(Image.fromarray(ratio.astype(np.float32), "F").resize((out.shape[1], out.shape[0]), Image.BILINEAR))
+    return np.clip(out[:, :, :3] * big[:, :, None], 0, 255)
+
+
 def smooth_alpha(alpha, size):
     """The 1x transparency upscaled smoothly and sharpened back to a clean
     edge about a game pixel wide."""
@@ -234,6 +261,8 @@ def cmd_stitch(args):
                 out[weight > 0, 3] = alpha[weight > 0]
             painted = (weight > 0) & (out[:, :, 3] > 0)
             out[painted, :3] = colour[painted] / weight[painted][:, None]
+            if getattr(args, "match_light", True):
+                out[:, :, :3] = match_light(out, original)
             dst = layer_path(args.pack, level, layer)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             Image.fromarray(np.rint(out).clip(0, 255).astype(np.uint8), "RGBA").save(dst)
@@ -505,6 +534,8 @@ def main():
                    help="outlines: smooth, or hard (the 1x shape in 4x blocks)")
     s.add_argument("--alpha", choices=("shape", "key"), default="shape",
                    help="transparency from the original's shape, or from the painting (not magenta)")
+    s.add_argument("--no-match-light", dest="match_light", action="store_false",
+                   help="keep the painting's own brightness")
     s.set_defaults(func=cmd_stitch)
     s = sub.add_parser("nearest")
     s.add_argument("export")
@@ -522,6 +553,7 @@ def main():
     s.add_argument("--overlap", type=int, default=32)
     s.add_argument("--edges", choices=("smooth", "hard"), default="smooth")
     s.add_argument("--alpha", choices=("shape", "key"), default="key")
+    s.add_argument("--no-match-light", dest="match_light", action="store_false")
     s.set_defaults(func=cmd_stitch_all)
     s = sub.add_parser("split-hud")
     s.add_argument("export")
