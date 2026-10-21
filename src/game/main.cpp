@@ -404,7 +404,7 @@ int main(int argc, char** argv) {
     render_opt.extra = settings.wide ? bt::kWideExtra : 0;
     std::unique_ptr<bt::ArtPack> pack;
     if (const std::filesystem::path p = pack_arg.empty() ? find_pack(settings, settings_path.parent_path()) : std::filesystem::path(pack_arg); !p.empty() && std::filesystem::exists(p / "pack.json"))
-        pack = std::make_unique<bt::ArtPack>(p);
+        pack = std::make_unique<bt::ArtPack>(p, shot.empty());  // decode in the background while playing
     const bt::HdRenderer hd(renderer, pack.get(), pack ? pack->scale() : 1);
     // One frame of the picture: HD with the art pack when there is one and it
     // is on, otherwise the original 320x240. HD frames always use sharp scaling.

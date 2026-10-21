@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <fstream>
 #include <string>
 
@@ -38,7 +39,7 @@ std::uint32_t scale_rgb(std::uint32_t p, const float f[3]) {
 
 }  // namespace
 
-ArtPack::ArtPack(std::filesystem::path dir) : dir_(std::move(dir)) {
+ArtPack::ArtPack(std::filesystem::path dir, bool background_loading) : dir_(std::move(dir)), background_loading_(background_loading) {
     std::ifstream in(dir_ / "pack.json");
     const std::string json((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     const std::size_t at = json.find("\"scale\"");
@@ -93,18 +94,27 @@ const ArtPack::Sprite* ArtPack::sprite(std::uint64_t key, int size) const {
 }
 
 const Image* ArtPack::layer(int level, bool background, int width, int height) const {
+    if (level != cached_level_) {  // a new level: let the last one's layers go
+        cache_.clear();
+        cached_level_ = level;
+    }
     const auto key = std::make_pair(level, background);
     auto it = cache_.find(key);
     if (it == cache_.end()) {
         char id[8];
         std::snprintf(id, sizeof id, "%X", level);
-        auto img = std::make_unique<Image>();
-        if (!read_png(dir_ / "levels" / id / (background ? "bg.png" : "fg.png"), *img) || img->width != width * scale_ ||
-            img->height != height * scale_)
-            img.reset();
-        it = cache_.emplace(key, std::move(img)).first;
+        const std::filesystem::path path = dir_ / "levels" / id / (background ? "bg.png" : "fg.png");
+        const int w = width * scale_, h = height * scale_;
+        auto load = [path, w, h]() {
+            auto img = std::make_shared<Image>();
+            std::error_code ec;
+            if (!std::filesystem::exists(path, ec) || !read_png(path, *img) || img->width != w || img->height != h) img.reset();
+            return img;
+        };
+        it = cache_.emplace(key, std::async(background_loading_ ? std::launch::async : std::launch::deferred, load).share()).first;
     }
-    return it->second.get();
+    if (background_loading_ && it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return nullptr;
+    return it->second.get().get();
 }
 
 void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptions& opt) const {

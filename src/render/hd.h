@@ -3,6 +3,7 @@
 
 #include <array>
 #include <filesystem>
+#include <future>
 #include <map>
 #include <memory>
 #include <string>
@@ -30,7 +31,10 @@ namespace bt {
 // Missing files (or files of the wrong size) fall back to the original art.
 class ArtPack {
 public:
-    explicit ArtPack(std::filesystem::path dir);
+    // background_loading: level layers decode on another thread; until one is
+    // ready, layer() returns nullptr (the original art is drawn). Only the
+    // current level's layers stay in memory either way.
+    explicit ArtPack(std::filesystem::path dir, bool background_loading = false);
     int scale() const { return scale_; }
     bool smooth_text() const { return smooth_text_; }
     bool smooth_fallback() const { return smooth_fallback_; }
@@ -54,7 +58,9 @@ private:
     std::filesystem::path dir_;
     int scale_ = 4;
     bool smooth_text_ = false, smooth_fallback_ = false;
-    mutable std::map<std::pair<int, bool>, std::unique_ptr<Image>> cache_;  // nullptr = not in the pack
+    bool background_loading_ = false;
+    mutable int cached_level_ = -1;
+    mutable std::map<std::pair<int, bool>, std::shared_future<std::shared_ptr<Image>>> cache_;  // null = not in the pack
     bool has_sprites_ = false;
     bool has_hud_ = false;
     std::array<std::uint8_t, 768> hud_palette_{};
