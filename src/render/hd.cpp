@@ -40,6 +40,19 @@ float cycle_gain(const std::uint8_t* shown, const std::uint8_t* painted, int v) 
     return b < 2.0f ? 1.0f : std::clamp(s / b, 0.4f, 2.0f);
 }
 
+// A painted pixel shown in a colour its palette entry didn't have when it
+// was painted (it was black then: flashes, effects): the painting's shading
+// in the shown colour.
+std::uint32_t colourise(std::uint32_t p, std::uint32_t shown) {
+    const float l = (0.30f * static_cast<float>((p >> 16) & 0xFF) + 0.59f * static_cast<float>((p >> 8) & 0xFF) +
+                     0.11f * static_cast<float>(p & 0xFF)) / 255.0f;
+    const float g = std::clamp(0.35f + 1.3f * l, 0.0f, 1.6f);
+    auto ch = [&](int shift) {
+        return static_cast<std::uint32_t>(std::clamp(static_cast<int>(static_cast<float>((shown >> shift) & 0xFF) * g + 0.5f), 0, 255)) << shift;
+    };
+    return (p & 0xFF000000u) | ch(16) | ch(8) | ch(0);
+}
+
 std::uint32_t scale_rgb(std::uint32_t p, const float f[3]) {
     auto ch = [&](int shift, float k) {
         const int v = static_cast<int>(((p >> shift) & 0xFF) * k + 0.5f);
@@ -380,8 +393,8 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                         continue;
                     }
                 }
-                if (!paint || original || (idx >= 0 && unfollowable[static_cast<std::size_t>(idx)]) ||
-                    (merged && front_idx >= 0 && unfollowable[static_cast<std::size_t>(front_idx)])) {
+                if (!paint || original || (!smooth && ((idx >= 0 && unfollowable[static_cast<std::size_t>(idx)]) ||
+                                                       (merged && front_idx >= 0 && unfollowable[static_cast<std::size_t>(front_idx)])))) {
                     original_pixel(x, y, idx, own4);
                     if (merged) original_pixel(x, y, front_idx, front4);
                     if (idx >= 0 || (merged && front_idx >= 0)) ++cov_.original, ++cov_.original_map;
@@ -395,6 +408,20 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                 if (tint_idx >= 0) ++cov_.painted;
                 const float* f = tint_idx >= 0 ? tint[static_cast<std::size_t>(tint_idx)].data() : factor;
                 const bool plain = tint_idx >= 0 ? identity[static_cast<std::size_t>(tint_idx)] : factor_identity;
+                if (smooth && tint_idx >= 0 && unfollowable[static_cast<std::size_t>(tint_idx)] && !animated[static_cast<std::size_t>(tint_idx)]) {
+                    const std::uint32_t shown = pal_colour(scene.palette, tint_idx);
+                    for (int yy = 0; yy < S; ++yy) {
+                        const std::uint32_t* src = &paint->pixels[static_cast<std::size_t>((oy + y) * S + yy) * paint->width + (ox + x) * S];
+                        std::uint32_t* dst = &play.pixels[static_cast<std::size_t>(y * S + yy) * play.width + x * S];
+                        for (int xx = 0; xx < S; ++xx) {
+                            const std::uint32_t a = src[xx] >> 24;
+                            if (!a) continue;
+                            const std::uint32_t c = colourise(src[xx], shown);
+                            dst[xx] = a == 255 ? c : over(dst[xx], c);
+                        }
+                    }
+                    continue;
+                }
                 if (smooth && tint_idx >= 0 && animated[static_cast<std::size_t>(tint_idx)]) {
                     // Cycled colour: brightness from the cycling, blended with
                     // the neighbouring pixels' so the shimmer has no blocks.
@@ -487,7 +514,7 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                     // since it was painted (fades, tints, other palettes).
                     float f[3] = {1, 1, 1};
                     const bool cyc = animated[static_cast<std::size_t>(v)];
-                    bool plain = true, follow = rep != nullptr && (!cyc || smooth);
+                    bool plain = true, follow = rep != nullptr && (!cyc || smooth), recolour = false;
                     if (follow && cyc) {  // brightness from the cycling colour
                         const float g = cycle_gain(scene.palette, rep->palette.data(), v);
                         f[0] = f[1] = f[2] = g;
@@ -500,6 +527,7 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                             follow = follow && (b != 0 || s == 0);
                             plain = plain && s == b;
                         }
+                        if (!follow && smooth) follow = recolour = true;  // grew out of black
                     }
                     if (!follow) {
                         original_part_pixel(x, y, sx, sy, v);
@@ -517,7 +545,7 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                             const std::uint32_t s = src[part.mirror ? S - 1 - xx : xx];
                             const std::uint32_t a = s >> 24;
                             if (!a) continue;
-                            const std::uint32_t c = plain ? s : scale_rgb(s, f);
+                            const std::uint32_t c = recolour ? colourise(s, pal_colour(scene.palette, v)) : plain ? s : scale_rgb(s, f);
                             dst[xx] = a == 255 ? c : over(dst[xx], c);
                         }
                     }
@@ -621,7 +649,7 @@ void HdRenderer::draw_hud(const Scene& scene, const Image& classic, const std::a
     auto put = [&](int x, int y, int v, const Image* rep, int rx, int ry) {
         float f[3] = {1, 1, 1};
         const bool cyc = cycled[static_cast<std::size_t>(v)];
-        bool plain = true, follow = rep != nullptr && (!cyc || smooth);
+        bool plain = true, follow = rep != nullptr && (!cyc || smooth), recolour = false;
         if (follow && cyc) {
             const float g = cycle_gain(scene.palette, painted_pal.data(), v);
             f[0] = f[1] = f[2] = g;
@@ -634,6 +662,7 @@ void HdRenderer::draw_hud(const Scene& scene, const Image& classic, const std::a
                 follow = follow && (b != 0 || s == 0);
                 plain = plain && s == b;
             }
+            if (!follow && smooth) follow = recolour = true;
         }
         if (!follow) {
             block(x, y, pal_colour(scene.palette, v));
@@ -647,7 +676,7 @@ void HdRenderer::draw_hud(const Scene& scene, const Image& classic, const std::a
             for (int xx = 0; xx < S; ++xx) {
                 const std::uint32_t a = src[xx] >> 24;
                 if (!a) continue;
-                const std::uint32_t c = plain ? src[xx] : scale_rgb(src[xx], f);
+                const std::uint32_t c = recolour ? colourise(src[xx], pal_colour(scene.palette, v)) : plain ? src[xx] : scale_rgb(src[xx], f);
                 dst[xx] = a == 255 ? c : over(dst[xx], c);
             }
         }
