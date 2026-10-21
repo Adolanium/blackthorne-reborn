@@ -159,7 +159,57 @@ def blur(a, radius):
     return a
 
 
-def match_light(out, original, radius=4):
+def fill_gaps(out, original, reach=24):
+    """Empty foreground pixels enclosed by foreground on all four sides
+    within `reach` game pixels (gaps between dark interior tiles) are filled
+    from the surrounding painting, so they don't show as black blocks. Open
+    edges keep their outline."""
+    a1 = np.asarray(original.getchannel("A")) > 0
+    h1, w1 = a1.shape
+    def near(arr, axis, reverse):
+        # distance to the nearest opaque pixel in one direction (capped)
+        d = np.full(arr.shape, reach + 1, dtype=np.int32)
+        run = np.full(arr.shape[1 - axis], reach + 1, dtype=np.int32)
+        idx = range(arr.shape[axis] - 1, -1, -1) if reverse else range(arr.shape[axis])
+        for i in idx:
+            line = arr[i, :] if axis == 0 else arr[:, i]
+            run = np.where(line, 0, np.minimum(run + 1, reach + 1))
+            if axis == 0:
+                d[i, :] = run
+            else:
+                d[:, i] = run
+        return d
+    enclosed = ~a1
+    for axis in (0, 1):
+        for rev in (False, True):
+            enclosed &= near(a1, axis, rev) <= reach
+    if not enclosed.any():
+        return
+    S = out.shape[0] // h1
+    gap = np.asarray(Image.fromarray(enclosed.astype(np.uint8) * 255).resize((w1 * S, h1 * S), Image.NEAREST)) > 0
+    gap &= out[:, :, 3] < 128
+    rgb = out[:, :, :3].copy()
+    known = out[:, :, 3] >= 128
+    todo = gap.copy()
+    for _ in range(reach * S):
+        if not todo.any():
+            break
+        total = np.zeros_like(rgb)
+        count = np.zeros(known.shape)
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            k = np.roll(np.roll(known, dy, 0), dx, 1)
+            total += np.roll(np.roll(rgb, dy, 0), dx, 1) * k[:, :, None]
+            count += k
+        fill = todo & (count > 0)
+        rgb[fill] = total[fill] / count[fill][:, None]
+        known = known | fill
+        todo &= ~fill
+    done = gap & ~todo
+    out[done, :3] = rgb[done]
+    out[done, 3] = 255
+
+
+def match_light(out, original, radius=2):
     """Scales the painting's local brightness to the original's (averaged
     over about `radius` game pixels of what each draws), so dark areas of
     the original stay dark: the model tends to brighten them, and the gaps
@@ -172,7 +222,7 @@ def match_light(out, original, radius=4):
     p, pa = lum(small)
     o_mean = blur(o * oa, radius) / np.maximum(blur(oa, radius), 1e-3)
     p_mean = blur(p * pa, radius) / np.maximum(blur(pa, radius), 1e-3)
-    ratio = np.clip((o_mean + 4.0) / (p_mean + 4.0), 0.1, 1.25)
+    ratio = np.clip((o_mean + 3.0) / (p_mean + 3.0), 0.05, 1.25)
     big = np.asarray(Image.fromarray(ratio.astype(np.float32), "F").resize((out.shape[1], out.shape[0]), Image.BILINEAR))
     return np.clip(out[:, :, :3] * big[:, :, None], 0, 255)
 
@@ -264,6 +314,8 @@ def cmd_stitch(args):
                 out[weight > 0, 3] = alpha[weight > 0]
             painted = (weight > 0) & (out[:, :, 3] > 0)
             out[painted, :3] = colour[painted] / weight[painted][:, None]
+            if layer == "fg" and getattr(args, "fill_gaps", False):
+                fill_gaps(out, original)
             if getattr(args, "match_light", True):
                 out[:, :, :3] = match_light(out, original)
             dst = layer_path(args.pack, level, layer)
@@ -402,7 +454,7 @@ def cmd_collect(args):
     for level in level_ids(args.export, args.levels):
         for run in range(args.runs):
             cmd = [args.exe, args.data, "--level", level, "--ticks", str(args.frames), "--size", "320x240", "--shot", tmp,
-                   "--pack", os.path.join(args.export, "no-pack"), "--parts", out,
+                   "--pack", os.path.join(args.export, "no-pack"), "--parts", out, "--godmode",
                    "--input", random_input(int(level, 16) * 100 + run, args.frames, explore=args.explore)]
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode:
@@ -540,6 +592,8 @@ def main():
     s.add_argument("--no-match-light", dest="match_light", action="store_false",
                    help="keep the painting's own brightness")
     s.add_argument("--levels", help="only these level ids (comma separated)")
+    s.add_argument("--fill-gaps", action="store_true",
+                   help="fill enclosed gaps in the foreground from the painting around them")
     s.set_defaults(func=cmd_stitch)
     s = sub.add_parser("nearest")
     s.add_argument("export")
@@ -558,6 +612,7 @@ def main():
     s.add_argument("--edges", choices=("smooth", "hard"), default="smooth")
     s.add_argument("--alpha", choices=("shape", "key"), default="key")
     s.add_argument("--no-match-light", dest="match_light", action="store_false")
+    s.add_argument("--fill-gaps", action="store_true")
     s.set_defaults(func=cmd_stitch_all)
     s = sub.add_parser("split-hud")
     s.add_argument("export")

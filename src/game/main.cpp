@@ -279,6 +279,105 @@ void save_settings(const std::filesystem::path& path, const Settings& s) {
 // at 1x in the level's palette (ds:4A12h, before fades), that palette as
 // <key>.pal (replacements are tinted against it), and a line in parts.tsv
 // (key, size, level, tick).
+// Every frame of every sprite bank the level loaded, converted the way the
+// game copies frames to an actor's buffer (Vm::load_frame: runs of
+// [mask][8 pixels]) and cut into parts of each square size and colour base
+// it could be shown with. Lists the candidate keys in <dir>/enum.tsv (level,
+// bank id, frame, part size, part index, base, key) and, with `save`, writes
+// the parts named in <dir>/wanted.tsv (key, size, base, bank id, frame, part
+// index) as <key>.png and .pal like save_parts.
+void enumerate_parts(const bt::Scene& scene, const std::filesystem::path& dir) {
+    const bt::Machine& m = *scene.machine;
+    const bt::DataSegment& ds = m.ds;
+    std::filesystem::create_directories(dir);
+    std::ofstream out(dir / "enum.tsv", std::ios::app);
+    std::map<std::string, std::vector<std::string>> wanted;  // "bank frame part size base" -> keys
+    {
+        std::ifstream in(dir / "wanted.tsv");
+        std::string key, size, base, bank, frame, part;
+        while (in >> key >> size >> base >> bank >> frame >> part) wanted[bank + " " + frame + " " + part + " " + size + " " + base].push_back(key);
+    }
+    std::array<std::uint8_t, 768> palette{};
+    for (int i = 0; i < 256; ++i) {
+        const std::uint8_t* level = ds.raw() + 0x4A12 + i * 3;
+        const std::uint8_t* from = (level[0] | level[1] | level[2]) & 0x3F ? level : scene.palette + i * 3;
+        std::copy_n(from, 3, palette.begin() + i * 3);
+    }
+    const int level = ds.u16(0x1CA4);
+    // Animated banks (si < 0x20) and the preloaded single-frame sprites
+    // (ds:11B2h ids, ds:11F2h offsets in the static segment), which are
+    // stored as runs already; they are listed as bank 1000h + id.
+    for (int si = 0; si < 0x60; si += 2) {
+        const bool is_static = si >= 0x20;
+        const int ssi = si - 0x20;
+        const std::uint16_t id = is_static ? ds.u16(static_cast<std::uint16_t>(0x11B2 + ssi)) : ds.u16(static_cast<std::uint16_t>(0x1152 + si));
+        if (!id || id == 0xFFFF) continue;
+        std::vector<std::vector<std::uint8_t>> frame_runs;
+        if (is_static) {
+            const std::size_t at = ds.u16(static_cast<std::uint16_t>(0x11F2 + ssi));
+            std::size_t end = at;
+            std::size_t next = m.statics.size();
+            for (int o = 0; o < 0x40; o += 2) {  // up to the next static's start
+                const std::uint16_t oid = ds.u16(static_cast<std::uint16_t>(0x11B2 + o));
+                const std::size_t ostart = ds.u16(static_cast<std::uint16_t>(0x11F2 + o));
+                if (oid && oid != 0xFFFF && ostart > at && ostart < next) next = ostart;
+            }
+            end = next;
+            frame_runs.emplace_back(m.statics.begin() + static_cast<std::ptrdiff_t>(at), m.statics.begin() + static_cast<std::ptrdiff_t>(end));
+        } else {
+            const std::size_t slot = ds.u16(static_cast<std::uint16_t>(0x1172 + si));
+            const std::size_t size = ds.u16(static_cast<std::uint16_t>(0x1192 + si));
+            if (slot >= m.banks.size() || !size) continue;
+            const bt::Bytes& src = m.banks[slot];
+            for (std::size_t frame = 0; (frame + 1) * size <= src.size(); ++frame) {
+                std::vector<std::uint8_t> runs;
+                for (std::size_t n = 0; n < size; n += 8) {
+                    std::uint8_t mask = 0, px[8];
+                    for (int k = 0; k < 8; ++k) {
+                        px[k] = src[frame * size + n + static_cast<std::size_t>(k)];
+                        mask = static_cast<std::uint8_t>((mask << 1) | (px[k] != 0));
+                    }
+                    runs.push_back(mask);
+                    runs.insert(runs.end(), px, px + 8);
+                }
+                frame_runs.push_back(std::move(runs));
+            }
+        }
+        const int bank_id = is_static ? 0x1000 + id : id;
+        for (std::size_t frame = 0; frame < frame_runs.size(); ++frame) {
+            const std::vector<std::uint8_t>& runs = frame_runs[frame];
+            for (int p : {8, 16, 32, 64}) {
+                const std::size_t bytes = static_cast<std::size_t>(p * p / 8 * 9);
+                for (std::size_t at = 0, part = 0; at + bytes <= runs.size(); at += bytes, ++part) {
+                    for (int base = 0; base < 0x100; base += 0x10) {
+                        bt::Renderer::Part pt;
+                        pt.size = p;
+                        pt.base = static_cast<std::uint8_t>(base);
+                        pt.data = runs.data() + at;
+                        char key[24];
+                        std::snprintf(key, sizeof key, "%016llx", static_cast<unsigned long long>(bt::Renderer::part_key(pt)));
+                        out << std::hex << level << '\t' << bank_id << std::dec << '\t' << frame << '\t' << p << '\t' << part << '\t' << base << '\t' << key << '\n';
+                        char spec[64];
+                        std::snprintf(spec, sizeof spec, "%x %zu %zu %d %d", bank_id, frame, part, p, base);
+                        auto w = wanted.find(spec);
+                        if (w == wanted.end()) continue;
+                        bt::Image img;
+                        img.resize(p, p);
+                        for (int y = 0; y < p; ++y)
+                            for (int x = 0; x < p; ++x) {
+                                const int v = bt::Renderer::part_pixel(pt, x, y);
+                                auto c = [&](int k) { return static_cast<std::uint32_t>((palette[static_cast<std::size_t>(v * 3 + k)] & 0x3F) * 255 / 63); };
+                                img.pixels[static_cast<std::size_t>(y) * p + x] = v < 0 ? 0u : 0xFF000000u | (c(0) << 16) | (c(1) << 8) | c(2);
+                            }
+                        bt::write_png(dir / (std::string(key) + ".png"), img);
+                        std::ofstream(dir / (std::string(key) + ".pal"), std::ios::binary).write(reinterpret_cast<const char*>(palette.data()), 768);
+                    }
+                }
+            }
+        }
+    }
+}
+
 void save_parts(const bt::Scene& scene, const std::filesystem::path& dir, int tick) {
     const bt::Machine& m = *scene.machine;
     // Not while the screen is faded or fading: sprite colours that only the
@@ -333,11 +432,14 @@ void save_parts(const bt::Scene& scene, const std::filesystem::path& dir, int ti
 // --shot runs N ticks headless, saves the window to a BMP (and --frame the
 // rendered frame before display scaling to a PNG) and exits (for tests).
 // --parts saves every sprite part shown, once per key, as <key>.png (1x, the
-// level's palette) for art packs (tools/artpack.py sprites).
+// level's palette) for art packs (tools/artpack.py collect); --godmode keeps
+// Kyle's health topped up so scripted play gets further (for collecting).
 int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
     int wide_arg = -1, filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
     std::string shot, input_spec, keys_spec, pack_arg, frame_png, parts_dir;
+    bool godmode = false;
+    std::string enumerate_dir;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         const char* next = i + 1 < argc ? argv[i + 1] : "";
@@ -351,6 +453,8 @@ int main(int argc, char** argv) {
         else if (a == "--pack") pack_arg = next, ++i;
         else if (a == "--frame") frame_png = next, ++i;
         else if (a == "--parts") parts_dir = next, ++i;
+        else if (a == "--godmode") godmode = true;
+        else if (a == "--enumerate") enumerate_dir = next, ++i;
         else if (a == "--size") {
             char* end = nullptr;
             width = static_cast<int>(std::strtol(next, &end, 10));
@@ -442,6 +546,7 @@ int main(int argc, char** argv) {
         // Scripted input as bttrace takes it ("from-to:hexbits,..."; tick k
         // uses the bits at k - 1) and typed text ("frame:TEXT", one key per
         // frame from that frame on).
+        int max_hp = 0;
         struct Span { int from, to; unsigned bits; };
         std::vector<Span> spans;
         for (std::size_t pos = 0; pos < input_spec.size();) {
@@ -479,6 +584,13 @@ int main(int argc, char** argv) {
             }
             const bool keep_running = handle_events();
             if (!parts_dir.empty()) save_parts(game->display(), parts_dir, t);
+            if (!enumerate_dir.empty() && t == ticks_arg) enumerate_parts(game->display(), enumerate_dir);
+            if (godmode) {  // Kyle's health (ds:148Ah) back to the most it has been
+                bt::DataSegment& d = game->machine().ds;
+                const int hp = static_cast<std::int16_t>(d.u16(0x148A));
+                if (hp > max_hp) max_hp = hp;
+                if (hp > 0 && hp < max_hp) d.set_u16(0x148A, static_cast<std::uint16_t>(max_hp));
+            }
             const Filter keep = draw(frame);
             display->present(frame, false);
             display->filter = keep;
