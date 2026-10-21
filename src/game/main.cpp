@@ -21,6 +21,7 @@
 #include "data/archive.h"
 #include "engine/game.h"
 #include "render/filters.h"
+#include "render/effects.h"
 #include "render/hd.h"
 #include "render/png.h"
 #include "render/renderer.h"
@@ -63,6 +64,117 @@ std::uint16_t read_gamepad(SDL_Gamepad* pad) {
     return bits;
 }
 
+#ifdef BT_HAVE_DXIL
+#include "light_frag_dxil.h"
+#endif
+
+// The lighting pass (render/effects.h, shaders/light.frag.hlsl): a custom
+// GPU render state of SDL's GPU renderer that draws the HD frame lit by the
+// light and glow maps. Only with the GPU renderer and a compiled shader.
+class Lighting {
+public:
+    Lighting(SDL_Renderer* sdl, SDL_GPUDevice* device) : sdl_(sdl), device_(device) {
+#ifdef BT_HAVE_DXIL
+        if (!device_ || !(SDL_GetGPUShaderFormats(device_) & SDL_GPU_SHADERFORMAT_DXIL)) return;
+        SDL_GPUShaderCreateInfo info{};
+        info.code = kLightFragDxil;
+        info.code_size = sizeof kLightFragDxil;
+        info.entrypoint = "main";
+        info.format = SDL_GPU_SHADERFORMAT_DXIL;
+        info.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
+        info.num_samplers = 4;
+        info.num_uniform_buffers = 1;
+        shader_ = SDL_CreateGPUShader(device_, &info);
+        SDL_GPUSamplerCreateInfo s{};
+        s.min_filter = s.mag_filter = SDL_GPU_FILTER_LINEAR;
+        s.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+        s.address_mode_u = s.address_mode_v = s.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        sampler_ = SDL_CreateGPUSampler(device_, &s);
+#endif
+    }
+    ~Lighting() {
+        release();
+        if (sampler_) SDL_ReleaseGPUSampler(device_, sampler_);
+        if (shader_) SDL_ReleaseGPUShader(device_, shader_);
+    }
+    bool available() const { return shader_ && sampler_; }
+
+    // Builds the light maps for this frame and sets the pass's parameters;
+    // false if the pass can't run.
+    bool prepare(const bt::HdRenderer& hd, int level, int frame_w, int frame_h, int scale, double seconds) {
+        if (!available()) return false;
+        bt::build_light_maps(hd.emission(), maps_);
+        const bt::Image& ui = hd.ui_mask();
+        if (!light_ || light_->w != maps_.light.width || light_->h != maps_.light.height || glow_->w != maps_.glow.width ||
+            glow_->h != maps_.glow.height || ui_->w != ui.width || ui_->h != ui.height) {
+            release();
+            light_ = SDL_CreateTexture(sdl_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, maps_.light.width, maps_.light.height);
+            glow_ = SDL_CreateTexture(sdl_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, maps_.glow.width, maps_.glow.height);
+            ui_ = SDL_CreateTexture(sdl_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, ui.width, ui.height);
+            if (!light_ || !glow_ || !ui_) return false;
+            auto gpu = [](SDL_Texture* t) {
+                return static_cast<SDL_GPUTexture*>(SDL_GetPointerProperty(SDL_GetTextureProperties(t), SDL_PROP_TEXTURE_GPU_TEXTURE_POINTER, nullptr));
+            };
+            SDL_GPUTextureSamplerBinding bind[3]{};
+            bind[0].texture = gpu(light_);
+            bind[0].sampler = sampler_;
+            bind[1].texture = gpu(glow_);
+            bind[1].sampler = sampler_;
+            bind[2].texture = gpu(ui_);
+            bind[2].sampler = sampler_;
+            if (!bind[0].texture || !bind[1].texture || !bind[2].texture) return false;
+            SDL_GPURenderStateCreateInfo info{};
+            info.fragment_shader = shader_;
+            info.num_sampler_bindings = 3;
+            info.sampler_bindings = bind;
+            state_ = SDL_CreateGPURenderState(sdl_, &info);
+            if (!state_) return false;
+        }
+        SDL_UpdateTexture(light_, nullptr, maps_.light.pixels.data(), maps_.light.width * 4);
+        SDL_UpdateTexture(glow_, nullptr, maps_.glow.pixels.data(), maps_.glow.width * 4);
+        SDL_UpdateTexture(ui_, nullptr, ui.pixels.data(), ui.width * 4);
+        bt::LightParams p{};
+        const float x0 = static_cast<float>(hd.playfield_x() * scale) / static_cast<float>(frame_w);
+        const float x1 = static_cast<float>((hd.playfield_x() + hd.playfield_w()) * scale) / static_cast<float>(frame_w);
+        const float y1 = static_cast<float>(bt::Renderer::kHeight * scale) / static_cast<float>(frame_h);
+        const float pf[4] = {x0, 0.0f, x1, y1};
+        // How dark each area is without its lights: the mines and Sarlac's
+        // fortress are lit by fire, the forest is dim, the desert is outdoors.
+        float a = 0.78f;
+        if (level >= 0xC0 && level <= 0xC5) a = 0.55f;        // mines
+        else if (level >= 0xCC && level <= 0xD2) a = 0.66f;   // forest
+        else if (level >= 0xDA && level <= 0xDE) a = 0.92f;   // desert
+        else if (level >= 0xEC && level <= 0xF0) a = 0.55f;   // fortress
+        const float amb[4] = {a, a * 1.02f, a * 1.12f > 1.0f ? 1.0f : a * 1.12f, 1.9f};
+        const float gl[4] = {1.0f, 0.60f, 0.28f, 0.9f};
+        const float misc[4] = {static_cast<float>(seconds), 0.55f, 0.25f, 0.35f};
+        std::copy_n(pf, 4, p.playfield);
+        std::copy_n(amb, 4, p.ambient);
+        std::copy_n(gl, 4, p.glow);
+        std::copy_n(misc, 4, p.misc);
+        SDL_SetGPURenderStateFragmentUniforms(state_, 0, &p, sizeof p);
+        return true;
+    }
+    SDL_GPURenderState* state() const { return state_; }
+
+private:
+    void release() {
+        if (state_) SDL_DestroyGPURenderState(state_);
+        if (light_) SDL_DestroyTexture(light_);
+        if (glow_) SDL_DestroyTexture(glow_);
+        if (ui_) SDL_DestroyTexture(ui_);
+        state_ = nullptr;
+        light_ = glow_ = ui_ = nullptr;
+    }
+    SDL_Renderer* sdl_;
+    SDL_GPUDevice* device_;
+    SDL_GPUShader* shader_ = nullptr;
+    SDL_GPUSampler* sampler_ = nullptr;
+    SDL_Texture *light_ = nullptr, *glow_ = nullptr, *ui_ = nullptr;
+    SDL_GPURenderState* state_ = nullptr;
+    bt::LightMaps maps_;
+};
+
 // How the 320x240 frame reaches the window (F8 cycles).
 enum class Filter { Sharp, Pixel, Smooth, Crt, Count };
 constexpr const char* kFilterNames[] = {"sharp", "pixel perfect", "smooth (Scale4x)", "CRT"};
@@ -78,6 +190,7 @@ public:
         for (SDL_Texture* t : {source_, prescaled_}) if (t) SDL_DestroyTexture(t);
     }
     Filter filter = Filter::Sharp;
+    SDL_GPURenderState* effect = nullptr;  // a lighting pass for the final draw (set per frame)
 
     void present(const bt::Image& frame, bool flip = true) {
         const bt::Image* image = &frame;
@@ -117,7 +230,9 @@ public:
         }
         SDL_SetRenderDrawColor(sdl_, 0, 0, 0, 255);
         SDL_RenderClear(sdl_);
+        if (effect) SDL_SetGPURenderState(sdl_, effect);
         SDL_RenderTexture(sdl_, shown, nullptr, &dst);
+        if (effect) SDL_SetGPURenderState(sdl_, nullptr);
         if (filter == Filter::Crt) scanlines(dst, frame.height);
         if (flip) SDL_RenderPresent(sdl_);
     }
@@ -197,6 +312,7 @@ struct Settings {
     std::string soundfont;  // empty: the first .sf2 in the settings folder or next to the game
     std::string pack;       // art pack folder; empty: the first in packs/ (settings folder, then the game's)
     bool hd = true;         // use the art pack when there is one (F6)
+    bool effects = true;    // lighting and atmosphere over the HD picture (F4)
     std::vector<Binding> bindings = default_bindings();
 };
 
@@ -242,6 +358,8 @@ Settings load_settings(const std::filesystem::path& path) {
             s.pack = line.substr(5);
         } else if (line.rfind("hd=", 0) == 0) {
             s.hd = std::atoi(line.c_str() + 3) != 0;
+        } else if (line.rfind("effects=", 0) == 0) {
+            s.effects = std::atoi(line.c_str() + 8) != 0;
         } else if (line.rfind("soundfont=", 0) == 0) {
             s.soundfont = line.substr(10);
         } else if (line.rfind("widescreen=", 0) == 0) {
@@ -267,7 +385,7 @@ Settings load_settings(const std::filesystem::path& path) {
 
 void save_settings(const std::filesystem::path& path, const Settings& s) {
     std::ofstream out(path);
-    out << "filter=" << static_cast<int>(s.filter) << "\nwidescreen=" << (s.wide ? 1 : 0) << "\nsoundfont=" << s.soundfont << "\npack=" << s.pack << "\nhd=" << (s.hd ? 1 : 0)
+    out << "filter=" << static_cast<int>(s.filter) << "\nwidescreen=" << (s.wide ? 1 : 0) << "\nsoundfont=" << s.soundfont << "\npack=" << s.pack << "\nhd=" << (s.hd ? 1 : 0) << "\neffects=" << (s.effects ? 1 : 0)
         << '\n';
     for (const Binding& b : s.bindings) {
         out << "key." << b.name << '=';
@@ -510,7 +628,7 @@ void save_metatiles(const bt::Scene& scene, std::size_t count, const std::filesy
         bt::write_png(dir / name, img);
         ++written;
     }
-    std::printf("level %s: %zu metatiles, %d alternates\n", level, count, written);
+    std::printf("level %s: %zu metatiles, %d alternates, part sizes %d/%d\n", level, count, written, ds.u16(0x350), ds.u16(0x352));
 }
 
 void save_parts(const bt::Scene& scene, const std::filesystem::path& dir, int tick) {
@@ -629,7 +747,8 @@ int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
     int wide_arg = -1, filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
     std::string shot, input_spec, keys_spec, pack_arg, frame_png, parts_dir;
-    bool godmode = false, coverage = false;
+    bool godmode = false, coverage = false, no_gpu = false;
+    int effects_arg = -1;
     std::string enumerate_dir, metatiles_dir;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -646,6 +765,8 @@ int main(int argc, char** argv) {
         else if (a == "--parts") parts_dir = next, ++i;
         else if (a == "--godmode") godmode = true;
         else if (a == "--coverage") coverage = true;
+        else if (a == "--no-gpu") no_gpu = true;
+        else if (a == "--effects") effects_arg = std::atoi(next), ++i;
         else if (a == "--enumerate") enumerate_dir = next, ++i;
         else if (a == "--metatiles") metatiles_dir = next, ++i;
         else if (a == "--size") {
@@ -684,11 +805,23 @@ int main(int argc, char** argv) {
         return static_cast<bool>(in.read(pw.data(), 4));
     };
     SDL_free(const_cast<char*>(pref));
-    SDL_Window* window = nullptr;
+    SDL_Window* window = SDL_CreateWindow("Blackthorne Reborn", width, height, shot.empty() ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_HIDDEN);
+    if (!window) return 1;
+    // SDL's renderer on a GPU device, so the lighting pass can run; any
+    // other renderer otherwise.
+    SDL_GPUDevice* gpu = nullptr;
     SDL_Renderer* sdl = nullptr;
-    if (!SDL_CreateWindowAndRenderer("Blackthorne Reborn", width, height,
-                                     shot.empty() ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_HIDDEN, &window, &sdl))
-        return 1;
+#ifdef BT_HAVE_DXIL
+    if (!no_gpu && (gpu = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_DXIL, false, nullptr)) != nullptr) {
+        sdl = SDL_CreateGPURenderer(gpu, window);
+        if (!sdl) {
+            SDL_DestroyGPUDevice(gpu);
+            gpu = nullptr;
+        }
+    }
+#endif
+    if (!sdl) sdl = SDL_CreateRenderer(window, nullptr);
+    if (!sdl) return 1;
     SDL_SetRenderVSync(sdl, 1);
     Settings settings = load_settings(settings_path);
     audio.open();  // the game runs silently if there is no audio device
@@ -696,6 +829,7 @@ int main(int argc, char** argv) {
     auto display = std::make_unique<Display>(sdl);
     if (filter_arg >= 0 && filter_arg < static_cast<int>(Filter::Count)) settings.filter = static_cast<Filter>(filter_arg);
     if (wide_arg >= 0) settings.wide = wide_arg != 0;
+    if (effects_arg >= 0) settings.effects = effects_arg != 0;
     display->filter = settings.filter;
     bt::RenderOptions render_opt;
     render_opt.extra = settings.wide ? bt::kWideExtra : 0;
@@ -705,9 +839,13 @@ int main(int argc, char** argv) {
     const bt::HdRenderer hd(renderer, pack.get(), pack ? pack->scale() : 1);
     // One frame of the picture: HD with the art pack when there is one and it
     // is on, otherwise the original 320x240. HD frames always use sharp scaling.
+    auto lighting = std::make_unique<Lighting>(sdl, gpu);
     auto draw = [&](bt::Image& out) {
+        display->effect = nullptr;
         if (pack && settings.hd) {
             hd.render_screen(game->display(), out, render_opt);
+            if (settings.effects && lighting->prepare(hd, game->level_id(), out.width, out.height, hd.scale(), static_cast<double>(SDL_GetTicks()) / 1000.0))
+                display->effect = lighting->state();
             const Filter keep = display->filter;
             display->filter = Filter::Sharp;
             return keep;
@@ -803,7 +941,9 @@ int main(int argc, char** argv) {
         const bool ok = pixels && SDL_SaveBMP(pixels, shot.c_str());
         SDL_DestroySurface(pixels);
         display.reset();
+        lighting.reset();
         SDL_DestroyRenderer(sdl);
+        if (gpu) SDL_DestroyGPUDevice(gpu);
         SDL_DestroyWindow(window);
         audio.close();
         music.close();
@@ -832,6 +972,11 @@ int main(int argc, char** argv) {
                 const SDL_Keycode k = e.key.key;
                 if (k >= SDLK_A && k <= SDLK_Z) game->type_key(static_cast<char>('A' + (k - SDLK_A)));
                 else if (k >= SDLK_0 && k <= SDLK_9) game->type_key(static_cast<char>('0' + (k - SDLK_0)));
+            }
+            if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_F4 && lighting->available()) {
+                settings.effects = !settings.effects;
+                save_settings(settings_path, settings);
+                SDL_SetWindowTitle(window, settings.effects ? "Blackthorne Reborn - lighting on" : "Blackthorne Reborn - lighting off");
             }
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_F6 && pack) {
                 settings.hd = !settings.hd;
@@ -882,7 +1027,9 @@ int main(int argc, char** argv) {
     }
     if (pad) SDL_CloseGamepad(pad);
     display.reset();
+    lighting.reset();
     SDL_DestroyRenderer(sdl);
+    if (gpu) SDL_DestroyGPUDevice(gpu);
     SDL_DestroyWindow(window);
     audio.close();
     music.close();

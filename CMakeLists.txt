@@ -50,7 +50,7 @@ add_library(btengine STATIC
 )
 target_link_libraries(btengine PUBLIC btdata)
 
-add_library(btrender STATIC src/render/renderer.cpp src/render/filters.cpp src/render/png.cpp src/render/hd.cpp)
+add_library(btrender STATIC src/render/renderer.cpp src/render/filters.cpp src/render/png.cpp src/render/hd.cpp src/render/effects.cpp)
 target_link_libraries(btrender PUBLIC btengine)
 target_include_directories(btrender PRIVATE ${stb_SOURCE_DIR})
 
@@ -63,6 +63,32 @@ endif()
 
 add_executable(blackthorne WIN32 src/game/main.cpp)
 target_link_libraries(blackthorne PRIVATE btrender btaudio SDL3::SDL3-static)
+
+# The lighting shader (src/render/shaders), compiled to DXIL for Direct3D 12
+# with the Windows SDK's dxc. Without it the game runs without the effects.
+if(WIN32)
+    file(GLOB BT_DXC_CANDIDATES "$ENV{ProgramFiles\(x86\)}/Windows Kits/10/bin/*/x64/dxc.exe")
+    list(SORT BT_DXC_CANDIDATES ORDER DESCENDING)
+    list(GET BT_DXC_CANDIDATES 0 BT_DXC_DEFAULT)
+    find_program(BT_DXC NAMES dxc HINTS ${BT_DXC_DEFAULT})
+    if(NOT BT_DXC AND BT_DXC_DEFAULT)
+        set(BT_DXC ${BT_DXC_DEFAULT})
+    endif()
+endif()
+if(BT_DXC)
+    set(BT_GEN ${CMAKE_BINARY_DIR}/gen)
+    add_custom_command(
+        OUTPUT ${BT_GEN}/light_frag_dxil.h
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${BT_GEN}
+        COMMAND ${BT_DXC} -nologo -T ps_6_0 -E main -Fo ${BT_GEN}/light.frag.dxil ${CMAKE_SOURCE_DIR}/src/render/shaders/light.frag.hlsl
+        COMMAND ${CMAKE_COMMAND} -DIN=${BT_GEN}/light.frag.dxil -DOUT=${BT_GEN}/light_frag_dxil.h -DNAME=kLightFragDxil
+                -P ${CMAKE_SOURCE_DIR}/cmake/bin2h.cmake
+        DEPENDS ${CMAKE_SOURCE_DIR}/src/render/shaders/light.frag.hlsl ${CMAKE_SOURCE_DIR}/cmake/bin2h.cmake
+        COMMENT "Compiling the lighting shader")
+    target_sources(blackthorne PRIVATE ${BT_GEN}/light_frag_dxil.h)
+    target_include_directories(blackthorne PRIVATE ${BT_GEN})
+    target_compile_definitions(blackthorne PRIVATE BT_HAVE_DXIL=1)
+endif()
 
 # GeneralUser GS (free SoundFont by S. Christian Collins, see its LICENSE.txt),
 # placed next to the game so the music uses it out of the box.

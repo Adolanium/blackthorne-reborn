@@ -208,35 +208,29 @@ python tools/artpack.py stitch-hud out/export out/work packs/<name>
 `out/style/` holds `fg.png`, `bg.png` and `sprites.png`: repainted examples
 that define the style.
 
-## Next: the GPU renderer, lighting and effects
+## Lighting and atmosphere
 
-The paintings give the detail; light and atmosphere are next. The plan,
-without vendor-specific upscalers (the art is already at 4x):
+On Windows the game draws through SDL's GPU renderer (Direct3D 12) and runs a
+lighting pass over the HD picture (F4 toggles it, `effects=` in
+`settings.ini`, `--effects 0|1` on the command line, `--no-gpu` for the old
+renderer):
 
-1. **Composite on the GPU.** Move `HdRenderer`'s composition to SDL3's GPU
-   API (Vulkan, Direct3D 12 or Metal): painted layers and sprites as
-   textured quads in the original's order, with the HUD and text as a
-   separate overlay. The first milestone is output identical to the CPU
-   `HdRenderer`, which stays as the reference. This also removes the CPU
-   cost of drawing at 4x, so higher resolutions become cheap.
-2. **Scene data for effects.** Alongside colour, render a depth value per
-   layer, masks (map, sprites, text and HUD) and motion vectors (camera
-   and sprite movement between displayed frames). `Game::display()` can
-   show the same page for several ticks during fades and waits, so
-   anything that works across frames follows the displayed frames, not the
-   ticks.
-3. **Lighting.** Light sources come from the game itself: palette-cycled
-   fire, torches and lava (the cycle ranges say which pixels they are),
-   muzzle flashes and explosions (sprite effects), glowing items. Each
-   gives a dynamic light that flickers with the cycling colours. Normal
-   and depth maps generated for the paintings let light wrap around rocks
-   and ledges.
-4. **Atmosphere and particles.** Bloom on bright things, light shafts,
-   fog layers with parallax, embers rising from fires, sparks and dust on
-   impacts, and a colour grade per level.
+- **Light sources come from the game.** While drawing, `HdRenderer` records
+  an emission image: warm colours in palette cycles (torches, braziers,
+  lava) and bright or cycled sprite pixels (muzzle flashes, explosions,
+  glowing effects). `build_light_maps()` (`src/render/effects.cpp`) spreads
+  it into a wide light map and a tight glow map.
+- **The pass** (`src/render/shaders/light.frag.hlsl`, compiled to DXIL with
+  the Windows SDK's `dxc` at build time) darkens each area to its ambient
+  level (the mines and the fortress are dark, the forest dim, the desert
+  bright), adds the flickering firelight and glow, a slow haze and a
+  vignette. Text and dialogue boxes, and the HUD, stay as they are.
+- Without Direct3D 12 or `dxc` (or with the classic art) the game draws as
+  before.
 
-Gameplay never changes. Every effect is a renderer option, and the classic
-and CPU HD paths stay available.
+Next: normal maps for the paintings (light wrapping around rocks), embers
+and sparks, fog layers with parallax, light shafts, and SPIR-V shaders so
+the pass runs on Vulkan too.
 
 ## Checking nothing broke
 

@@ -111,6 +111,15 @@ public:
     };
     const Coverage& coverage() const { return cov_; }
 
+    // What gives off light in the last frame, 1 pixel per game pixel of the
+    // screen (fire and lava from palette cycles, bright effect sprites);
+    // transparent elsewhere. And the playfield's rect on the screen.
+    const Image& emission() const { return emission_; }
+    // Where text and dialogue boxes are (opaque white), same size: kept unlit.
+    const Image& ui_mask() const { return ui_; }
+    int playfield_x() const { return play_x_; }
+    int playfield_w() const { return play_w_; }
+
 private:
     void draw_hud(const Scene& scene, const Image& classic, const std::array<bool, 256>& cycled, Image& page) const;
     // A painted glyph at (x, y) in game pixels of `out` (the playfield or the
@@ -126,6 +135,8 @@ private:
     mutable std::vector<std::uint8_t> cells_;
     mutable std::vector<Renderer::Part> parts_;
     mutable Coverage cov_;
+    mutable Image emission_, ui_;
+    mutable int play_x_ = 0, play_w_ = 0;
     mutable std::map<int, std::uint64_t> anim_keys_;  // metatile -> key, this frame
     // Where each metatile first appears in each layer at load (for cells
     // changed to a metatile the painting already shows elsewhere).

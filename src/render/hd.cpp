@@ -219,6 +219,55 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
     Renderer::Layers& layers = layers_;
     base_.render_layers(scene, opt, layers);
     const int W = layers.foreground_back.width, H = Renderer::kHeight;
+    // The emission image, in screen coordinates.
+    play_x_ = (ds.u16(0x1CF6) & 1) ? 0 : (classic.width - W) / 2;
+    play_w_ = W;
+    emission_.resize(classic.width, classic.height);
+    std::fill(emission_.pixels.begin(), emission_.pixels.end(), 0u);
+    ui_.resize(classic.width, classic.height);
+    std::fill(ui_.pixels.begin(), ui_.pixels.end(), 0u);
+    auto text_cell = [&](int x, int y) {  // x, y in playfield pixels
+        const int sx = x - layers.shift;
+        if (sx < 0 || sx >= 256 || y < 0 || y >= 224) return false;
+        return ds.u16(static_cast<std::uint16_t>(0x2D08 + ((y >> 3) * 32 + (sx >> 3)) * 2)) != 0x20;
+    };
+    if (opt.text) {
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                if (text_cell(x, y) && play_x_ + x < ui_.width) ui_.pixels[static_cast<std::size_t>(y) * ui_.width + play_x_ + x] = 0xFFFFFFFFu;
+        // Dialogue boxes as a whole (their portraits are sprites in empty
+        // cells): each row with a frame piece (glyphs 1-8), from its first
+        // to its last text cell.
+        for (int row = 0; row < 28; ++row) {
+            int first = -1, last = -1;
+            bool frame = false;
+            for (int col = 0; col < 32; ++col) {
+                const std::uint16_t v = ds.u16(static_cast<std::uint16_t>(0x2D08 + (row * 32 + col) * 2));
+                if (v == 0x20) continue;
+                if (first < 0) first = col;
+                last = col;
+                frame = frame || (v >= 1 && v <= 8);
+            }
+            if (!frame) continue;
+            for (int y = row * 8; y < row * 8 + 8 && y < H; ++y)
+                for (int x = layers.shift + first * 8; x < layers.shift + last * 8 + 8; ++x)
+                    if (x >= 0 && x < W && play_x_ + x < ui_.width) ui_.pixels[static_cast<std::size_t>(y) * ui_.width + play_x_ + x] = 0xFFFFFFFFu;
+        }
+    }
+    auto emit = [&](int x, int y, std::uint32_t c, float strength) {
+        const int ex = play_x_ + x;
+        if (ex < 0 || ex >= emission_.width || y < 0 || y >= emission_.height) return;
+        const std::uint32_t a = static_cast<std::uint32_t>(std::clamp(strength, 0.0f, 1.0f) * 255.0f);
+        emission_.pixels[static_cast<std::size_t>(y) * emission_.width + ex] = (a << 24) | (c & 0xFFFFFFu);
+    };
+    // Fire: a warm, bright colour. Light: anything very bright.
+    auto warm = [](std::uint32_t c) {
+        const int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+        return r > 110 && r > b + 40 && g < r + 10;
+    };
+    auto brightness = [](std::uint32_t c) {
+        return (0.30f * static_cast<float>((c >> 16) & 0xFF) + 0.59f * static_cast<float>((c >> 8) & 0xFF) + 0.11f * static_cast<float>(c & 0xFF)) / 255.0f;
+    };
 
     // Colours the game animates through palette cycling keep the original
     // pixels, so waterfalls and torches still move.
@@ -446,7 +495,10 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                         continue;
                     }
                 }
-                if (!paint || original || (!smooth && ((idx >= 0 && unfollowable[static_cast<std::size_t>(idx)]) ||
+                // smooth_fallback packs: a changed or animated cell the pack has no
+                // painting for shows the painting at its place (what the level
+                // showed there at load) rather than the original pixels.
+                if (!paint || (original && !(smooth && state != 0 && (ox + x) >= 0 && (oy + y) >= 0 && (ox + x) < lw * 16 && (oy + y) < lh * 16)) || (!smooth && ((idx >= 0 && unfollowable[static_cast<std::size_t>(idx)]) ||
                                                        (merged && front_idx >= 0 && unfollowable[static_cast<std::size_t>(front_idx)])))) {
                     original_pixel(x, y, idx, own4);
                     if (merged) original_pixel(x, y, front_idx, front4);
@@ -474,6 +526,10 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                         }
                     }
                     continue;
+                }
+                if (tint_idx >= 0 && animated[static_cast<std::size_t>(tint_idx)]) {
+                    const std::uint32_t shown = pal_colour(scene.palette, tint_idx);
+                    if (warm(shown)) emit(x, y, shown, brightness(shown) * 1.4f);
                 }
                 if (smooth && tint_idx >= 0 && animated[static_cast<std::size_t>(tint_idx)]) {
                     // Cycled colour: brightness from the cycling, blended with
@@ -569,6 +625,12 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                     const int sx = px + x, sy = py + y;
                     const int v = Renderer::part_pixel(part, x, y);
                     if (v < 0 || full(sx, sy)) continue;
+                    if (!text_cell(sx, sy)) {
+                        const std::uint32_t shown = pal_colour(scene.palette, v);
+                        const float l = brightness(shown);
+                        if (animated[static_cast<std::size_t>(v)] && (warm(shown) || l > 0.6f)) emit(sx, sy, shown, l * 1.2f);
+                        else if (l > 0.88f) emit(sx, sy, shown, l);
+                    }
                     // The replacement follows the colour change of its pixel
                     // since it was painted (fades, tints, other palettes).
                     float f[3] = {1, 1, 1};
