@@ -51,7 +51,7 @@ Keep the same content: every structure and object stays recognisable, in the sam
 
 Gameplay constraints you must keep: characters walk on the top edges of platforms, so every platform top must stay flat and at exactly the same height and horizontal extent. Walls, ladders, doors, bridges and openings stay where they are. Do not add new platforms or block openings.
 
-The flat magenta (#ff00ff) areas are empty space (another layer shows through there): keep them flat magenta, with clean edges against the painted objects. No text, no characters, no border.
+The flat magenta (#ff00ff) areas are empty space (another layer shows through there): keep them flat magenta, with clean edges against the painted objects. Keep any people or creatures already in the image (cutscene pictures have them) and add none. No new text, no border.
 
 When out.png is saved, reply with only the word DONE.""",
     "bg": """in.png is the background layer of one section of a level from a 1994 side-scrolling platformer, upscaled from pixel art. It sits behind the playable foreground. style.png shows the approved repaint of another background section: it defines the target style.
@@ -62,7 +62,7 @@ Use your image generation tool to repaint in.png in that style, then save the re
 
 Keep the same content: every wall, structure and object stays recognisable, in the same place, at the same scale and in the same colour family. Redraw them freely in the new style. As a background it should be darker, softer and less contrasted than foreground art, with depth and atmosphere (haze, faint light).
 
-The flat magenta (#ff00ff) areas are empty (the foreground covers them or they stay black): keep them flat magenta with clean edges. No text, no characters, no border.
+The flat magenta (#ff00ff) areas are empty (the foreground covers them or they stay black): keep them flat magenta with clean edges. Keep any people or creatures already in the image (cutscene pictures have them) and add none. No new text, no border.
 
 When out.png is saved, reply with only the word DONE.""",
     "hud": """in.png is part of the HUD of a 1994 side-scrolling platformer, upscaled from pixel art: {what}. style.png shows the approved style of the game's repainted levels.
