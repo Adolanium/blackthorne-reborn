@@ -79,6 +79,11 @@ ArtPack::ArtPack(std::filesystem::path dir, bool background_loading) : dir_(std:
     smooth_fallback_ = flag("\"smooth_fallback\"");
     std::error_code ec;
     has_sprites_ = std::filesystem::is_directory(dir_ / "sprites", ec);
+    if (has_sprites_) {
+        std::ifstream aliases(dir_ / "sprites" / "alias.tsv");
+        std::string a, b;
+        while (aliases >> a >> b) aliases_[std::stoull(a, nullptr, 16)] = std::stoull(b, nullptr, 16);
+    }
     std::ifstream pal(dir_ / "hud" / "hud.pal", std::ios::binary);
     pal.read(reinterpret_cast<char*>(hud_palette_.data()), static_cast<std::streamsize>(hud_palette_.size()));
     has_hud_ = static_cast<bool>(pal);
@@ -148,6 +153,11 @@ const Image* ArtPack::hud(const std::string& name, int width, int height) const 
         it = hud_.emplace(name, std::move(img)).first;
     }
     return it->second.get();
+}
+
+std::uint64_t ArtPack::alias(std::uint64_t key) const {
+    auto it = aliases_.find(key);
+    return it == aliases_.end() ? 0 : it->second;
 }
 
 const ArtPack::Sprite* ArtPack::sprite(std::uint64_t key, int size) const {
@@ -366,13 +376,56 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                     const int row = background ? ds.u16(0x1CA0) : ds.u16(Machine::kMapRowBytes);
                     const int mtv = m.map_u16(static_cast<std::uint16_t>(lbase + my * row + mx * 2)) & 0x3FF;
                     const Image* cellp = nullptr;
+                    int borrow_x = -1, borrow_y = -1;
                     if (state == 2) cellp = pack_->cell(level, mtv);
+                    if (state == 2 && !cellp && paint) {
+                        if (where_level_ != level) {  // index the load-time maps once per level
+                            where_level_ = level;
+                            for (int b = 0; b < 2; ++b) {
+                                where_[b].clear();
+                                if (b && !scene.has_background) continue;
+                                const std::uint16_t wb = ds.u16(b ? 0x25B2 : 0x25B0);
+                                const int wr = b ? ds.u16(0x1CA0) : ds.u16(Machine::kMapRowBytes);
+                                const int ww = b ? bg_w : fg_w, wh = b ? bg_h : fg_h;
+                                for (int yy = 0; yy < wh; ++yy)
+                                    for (int xx = 0; xx < ww; ++xx) {
+                                        const std::size_t at = static_cast<std::size_t>((wb + yy * wr + xx * 2) & 0xFFFF);
+                                        const int v = (m.map_at_load[at] | (m.map_at_load[(at + 1) & 0xFFFF] << 8)) & 0x3FF;
+                                        where_[b].emplace(v, std::make_pair(xx, yy));
+                                    }
+                            }
+                        }
+                        auto w = where_[background ? 1 : 0].find(mtv);
+                        if (w != where_[background ? 1 : 0].end()) {
+                            borrow_x = w->second.first;
+                            borrow_y = w->second.second;
+                        }
+                    }
                     if (!cellp && Renderer::metatile_animated(scene, mtv)) {
                         auto k = anim_keys_.find(mtv);
                         if (k == anim_keys_.end()) k = anim_keys_.emplace(mtv, Renderer::metatile_key(scene, mtv)).first;
                         cellp = pack_->anim_cell(level, k->second);
                     }
                     const int ci = merged && front_idx >= 0 ? front_idx : idx;
+                    if (borrow_x >= 0 && ci >= 0) {  // the painting of the same metatile elsewhere
+                        const bool owner_front = front_idx >= 0 && !merged;
+                        if (owner_front != front) continue;
+                        ++cov_.painted;
+                        const float* f = tint[static_cast<std::size_t>(ci)].data();
+                        const bool plain = identity[static_cast<std::size_t>(ci)];
+                        const int lx = (ox + x) & 15, ly = (oy + y) & 15;
+                        for (int yy = 0; yy < S; ++yy) {
+                            const std::uint32_t* src = &paint->pixels[static_cast<std::size_t>((borrow_y * 16 + ly) * S + yy) * paint->width + (borrow_x * 16 + lx) * S];
+                            std::uint32_t* dst = &play.pixels[static_cast<std::size_t>(y * S + yy) * play.width + x * S];
+                            for (int xx = 0; xx < S; ++xx) {
+                                const std::uint32_t a = src[xx] >> 24;
+                                if (!a) continue;
+                                const std::uint32_t c = plain ? src[xx] : scale_rgb(src[xx], f);
+                                dst[xx] = a == 255 ? c : over(dst[xx], c);
+                            }
+                        }
+                        continue;
+                    }
                     if (cellp && !(ci >= 0 && unfollowable[static_cast<std::size_t>(ci)])) {
                         const bool owner_front = front_idx >= 0 && !merged;
                         if (owner_front != front || ci < 0) continue;
@@ -480,7 +533,13 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
         for (const Renderer::Part& part : parts_) {
             const int px = part.x - layers.view_x, py = part.y - layers.cam_y, size = part.size;
             if (px >= W || py >= H || px + size <= 0 || py + size <= 0) continue;
-            const ArtPack::Sprite* rep = pack_ ? pack_->sprite(Renderer::part_key(part), size) : nullptr;
+            const std::uint64_t pkey = Renderer::part_key(part);
+            const ArtPack::Sprite* rep = pack_ ? pack_->sprite(pkey, size) : nullptr;
+            bool aliased = false;  // the painting of the same pixels with another colour base
+            if (!rep && pack_ && pack_->alias(pkey)) {
+                rep = pack_->sprite(pack_->alias(pkey), size);
+                aliased = rep != nullptr;
+            }
             // smooth_fallback: the part rounded off, made when first needed.
             bool rounded = false;
             auto original_part_pixel = [&](int x, int y, int sx, int sy, int v) {
@@ -515,7 +574,9 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                     float f[3] = {1, 1, 1};
                     const bool cyc = animated[static_cast<std::size_t>(v)];
                     bool plain = true, follow = rep != nullptr && (!cyc || smooth), recolour = false;
-                    if (follow && cyc) {  // brightness from the cycling colour
+                    if (follow && aliased) {
+                        recolour = true;  // its colours are another base's: recolour to the shown ones
+                    } else if (follow && cyc) {  // brightness from the cycling colour
                         const float g = cycle_gain(scene.palette, rep->palette.data(), v);
                         f[0] = f[1] = f[2] = g;
                         plain = false;

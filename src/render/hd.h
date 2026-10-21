@@ -24,6 +24,9 @@ namespace bt {
 //                                    (key: Renderer::part_key, 16 hex digits)
 //   <pack>/sprites/<key>.pal         the palette it was painted against (768
 //                                    bytes of 6-bit RGB, from blackthorne --parts)
+//   <pack>/sprites/alias.tsv         "<key> <painted key>": parts with the same
+//                                    pixel data drawn with another colour base;
+//                                    drawn from that painting, recoloured
 //   <pack>/hud/side.png, bottom.png  the HUD's right panel and bottom bar
 //   <pack>/hud/icon_<nn>.png         item icon nn (hex; 00 is the empty slot)
 //   <pack>/hud/selection.png         the selection frame
@@ -56,6 +59,8 @@ public:
         std::array<std::uint8_t, 768> palette{};  // what it was painted against
     };
     const Sprite* sprite(std::uint64_t key, int size) const;
+    // The painted part a key is an alias of (same pixels, other colour base), or 0.
+    std::uint64_t alias(std::uint64_t key) const;
     // A HUD image ("side", "bottom", "icon_05", "selection") of w x h game
     // pixels, or nullptr; hud_palette() is what it was painted against.
     const Image* hud(const std::string& name, int width, int height) const;
@@ -78,6 +83,7 @@ private:
     mutable int cached_level_ = -1;
     mutable std::map<std::pair<int, bool>, std::shared_future<std::shared_ptr<Image>>> cache_;  // null = not in the pack
     bool has_sprites_ = false;
+    std::map<std::uint64_t, std::uint64_t> aliases_;
     bool has_hud_ = false, has_font_ = false, has_cells_ = false;
     mutable std::map<int, std::unique_ptr<Image>> cells_;  // level * 1024 + metatile; nullptr = not in the pack
     mutable std::map<std::pair<int, std::uint64_t>, std::unique_ptr<Image>> anim_cells_;
@@ -121,6 +127,10 @@ private:
     mutable std::vector<Renderer::Part> parts_;
     mutable Coverage cov_;
     mutable std::map<int, std::uint64_t> anim_keys_;  // metatile -> key, this frame
+    // Where each metatile first appears in each layer at load (for cells
+    // changed to a metatile the painting already shows elsewhere).
+    mutable int where_level_ = -1;
+    mutable std::map<int, std::pair<int, int>> where_[2];  // [background] metatile -> cell
 };
 
 }  // namespace bt
