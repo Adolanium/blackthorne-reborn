@@ -177,6 +177,29 @@ int main(int argc, char** argv) {
         }
         icon(renderer.selection_frame(), 0xF0, "selection.png");
         std::printf("HUD: panels, %zu icons\n", icons.size());
+        // The fonts: <out>/font/<f>_<nnn>.png (8x8; captions transparent
+        // outside their mask) and font.pal.
+        const std::filesystem::path fdir = out / "font";
+        std::filesystem::create_directories(fdir);
+        std::ofstream(fdir / "font.pal", std::ios::binary).write(reinterpret_cast<const char*>(pal.data()), 768);
+        for (int f = 0; f < 2; ++f) {
+            const auto& glyphs = renderer.font(f);
+            for (std::size_t i = 0; i < glyphs.size(); ++i) {
+                bt::Image img;
+                img.resize(8, 8);
+                bool any = false;
+                for (int y = 0; y < 8; ++y)
+                    for (int x = 0; x < 8; ++x) {
+                        const bool drawn = f == 0 || glyphs[i].set(x, y);
+                        img.pixels[static_cast<std::size_t>(y * 8 + x)] = drawn ? rgb(glyphs[i].pixels[static_cast<std::size_t>(y * 8 + x)]) : 0u;
+                        any = any || (drawn && glyphs[i].pixels[static_cast<std::size_t>(y * 8 + x)]);
+                    }
+                if (!any) continue;  // blank glyphs need no painting
+                char name[24];
+                std::snprintf(name, sizeof name, "%d_%03zx.png", f, i);
+                bt::write_png(fdir / name, img);
+            }
+        }
     } catch (const std::exception& e) {
         std::printf("HUD: skipped (%s)\n", e.what());
     }

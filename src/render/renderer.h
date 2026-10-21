@@ -112,6 +112,24 @@ public:
     const std::vector<std::vector<std::uint8_t>>& item_icons() const { return item_icons_; }
     const std::vector<std::uint8_t>& selection_frame() const { return selection_frame_; }
 
+    // The text fonts: 0 is the normal font (glyphs drawn whole), 1 the
+    // caption font (drawn where the mask is set, over the map).
+    struct Glyph {
+        std::array<std::uint8_t, 64> pixels;  // values 0-3 = palette entries 0-3
+        std::array<std::uint8_t, 8> mask;     // one bit per data byte, planar order
+        bool set(int x, int y) const {        // the mask bit of pixel (x, y)
+            const int plane = x & 3, data_col = x >> 2;
+            return mask[static_cast<std::size_t>(plane * 2 + (y >> 2))] & (0x80 >> ((y & 3) * 2 + data_col));
+        }
+    };
+    const std::vector<Glyph>& font(int which) const { return fonts_[which & 1]; }
+
+    // One metatile (a 16x16 map cell) as palette indices encoded like
+    // render_layers' map layers (index_pixel), transparent where no tile
+    // pixel is set; `front` gets the bit-3 ("in front") tiles only, else the
+    // others.
+    static void render_metatile(const Scene& scene, int metatile, bool front, Image& out);
+
 private:
     // A map layer: cells at `layer_offset` in the map segment, `row_bytes` per row,
     // `width` x `height` cells, viewed from (cam_x, cam_y).
@@ -128,10 +146,6 @@ private:
     std::vector<std::vector<std::uint8_t>> item_icons_;  // 32x32, resource 0x4C
     std::vector<std::uint8_t> selection_frame_;         // 32x32, resource 0x4D frame 0
 
-    struct Glyph {
-        std::array<std::uint8_t, 64> pixels;  // values 0-3 = palette entries 0-3
-        std::array<std::uint8_t, 8> mask;     // one bit per data byte, planar order
-    };
     std::vector<Glyph> fonts_[2];  // entries 288/289 and the alternate 290/291
 };
 

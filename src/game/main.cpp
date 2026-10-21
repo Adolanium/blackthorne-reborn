@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <set>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -378,8 +379,78 @@ void enumerate_parts(const bt::Scene& scene, const std::filesystem::path& dir) {
     }
 }
 
+// The level's metatiles that its maps don't use at load: the alternate cell
+// graphics the game switches in later (doors, bridges, menu text). Writes
+// each as <dir>/<level>_<mmm>.png (16x16, the level's palette at load) and
+// the palette as <dir>/<level>.pal, for art packs (cells/).
+void save_metatiles(const bt::Scene& scene, std::size_t count, const std::filesystem::path& dir) {
+    const bt::Machine& m = *scene.machine;
+    const bt::DataSegment& ds = m.ds;
+    std::filesystem::create_directories(dir);
+    std::vector<bool> used(count, false);
+    auto scan = [&](std::uint16_t base, int row, int w, int h) {
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const std::size_t at = static_cast<std::size_t>((base + y * row + x * 2) & 0xFFFF);
+                const int v = (m.map_at_load[at] | (m.map_at_load[(at + 1) & 0xFFFF] << 8)) & 0x3FF;
+                if (static_cast<std::size_t>(v) < count) used[static_cast<std::size_t>(v)] = true;
+            }
+    };
+    scan(ds.u16(0x25B0), ds.u16(bt::Machine::kMapRowBytes), ds.u16(bt::Machine::kMapWidth), ds.u16(bt::Machine::kMapHeight));
+    if (scene.has_background) scan(ds.u16(0x25B2), ds.u16(0x1CA0), ds.u16(0x1D15), ds.u16(0x1D17));
+    char level[8];
+    std::snprintf(level, sizeof level, "%X", ds.u16(0x1CA4));
+    std::ofstream(dir / (std::string(level) + ".pal"), std::ios::binary).write(reinterpret_cast<const char*>(m.palette_at_load.data()), 768);
+    int written = 0;
+    bt::Image back, front, img;
+    for (std::size_t mt = 0; mt < count; ++mt) {
+        if (used[mt]) continue;
+        bt::Renderer::render_metatile(scene, static_cast<int>(mt), false, back);
+        bt::Renderer::render_metatile(scene, static_cast<int>(mt), true, front);
+        img.resize(16, 16);
+        bool any = false;
+        for (std::size_t i = 0; i < img.pixels.size(); ++i) {
+            const int v = bt::Renderer::layer_index(front.pixels[i]) >= 0 ? bt::Renderer::layer_index(front.pixels[i]) : bt::Renderer::layer_index(back.pixels[i]);
+            if (v < 0) {
+                img.pixels[i] = 0u;
+                continue;
+            }
+            any = true;
+            auto c = [&](int k) { return static_cast<std::uint32_t>((m.palette_at_load[static_cast<std::size_t>(v * 3 + k)] & 0x3F) * 255 / 63); };
+            img.pixels[i] = 0xFF000000u | (c(0) << 16) | (c(1) << 8) | c(2);
+        }
+        if (!any) continue;
+        char name[32];
+        std::snprintf(name, sizeof name, "%s_%03zx.png", level, mt);
+        bt::write_png(dir / name, img);
+        ++written;
+    }
+    std::printf("level %s: %zu metatiles, %d alternates\n", level, count, written);
+}
+
 void save_parts(const bt::Scene& scene, const std::filesystem::path& dir, int tick) {
     const bt::Machine& m = *scene.machine;
+    {
+        // Map cells the game changed since the load: their metatiles go to
+        // cells.tsv (level, metatile), the alternates worth painting.
+        static std::set<std::pair<int, int>> seen;
+        const bt::DataSegment& d = m.ds;
+        const int lvl = d.u16(0x1CA4);
+        auto scan = [&](std::uint16_t base, int row, int w, int h) {
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    const std::size_t at = static_cast<std::size_t>((base + y * row + x * 2) & 0xFFFF);
+                    if (m.map[at] == m.map_at_load[at] && m.map[(at + 1) & 0xFFFF] == m.map_at_load[(at + 1) & 0xFFFF]) continue;
+                    const int v = (m.map[at] | (m.map[(at + 1) & 0xFFFF] << 8)) & 0x3FF;
+                    if (seen.insert({lvl, v}).second) {
+                        std::filesystem::create_directories(dir);
+                        std::ofstream(dir / "cells.tsv", std::ios::app) << std::hex << lvl << ' ' << v << std::dec << '\n';
+                    }
+                }
+        };
+        scan(d.u16(0x25B0), d.u16(bt::Machine::kMapRowBytes), d.u16(bt::Machine::kMapWidth), d.u16(bt::Machine::kMapHeight));
+        if (scene.has_background) scan(d.u16(0x25B2), d.u16(0x1CA0), d.u16(0x1D15), d.u16(0x1D17));
+    }
     // Not while the screen is faded or fading: sprite colours that only the
     // shown palette has would be saved dark.
     int shown = 0, base = 0;
@@ -439,7 +510,7 @@ int main(int argc, char** argv) {
     int wide_arg = -1, filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
     std::string shot, input_spec, keys_spec, pack_arg, frame_png, parts_dir;
     bool godmode = false;
-    std::string enumerate_dir;
+    std::string enumerate_dir, metatiles_dir;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         const char* next = i + 1 < argc ? argv[i + 1] : "";
@@ -455,6 +526,7 @@ int main(int argc, char** argv) {
         else if (a == "--parts") parts_dir = next, ++i;
         else if (a == "--godmode") godmode = true;
         else if (a == "--enumerate") enumerate_dir = next, ++i;
+        else if (a == "--metatiles") metatiles_dir = next, ++i;
         else if (a == "--size") {
             char* end = nullptr;
             width = static_cast<int>(std::strtol(next, &end, 10));
@@ -585,6 +657,8 @@ int main(int argc, char** argv) {
             const bool keep_running = handle_events();
             if (!parts_dir.empty()) save_parts(game->display(), parts_dir, t);
             if (!enumerate_dir.empty() && t == ticks_arg) enumerate_parts(game->display(), enumerate_dir);
+            if (!metatiles_dir.empty() && t == ticks_arg)
+                save_metatiles(game->display(), archive->resource(game->machine().ds.u16(0x1CEE + 0x25)).size() / 8, metatiles_dir);
             if (godmode) {  // Kyle's health (ds:148Ah) back to the most it has been
                 bt::DataSegment& d = game->machine().ds;
                 const int hp = static_cast<std::int16_t>(d.u16(0x148A));

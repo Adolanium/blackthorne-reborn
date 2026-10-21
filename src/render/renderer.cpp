@@ -384,6 +384,28 @@ static const std::array<std::uint8_t, 768> kIndexPalette = [] {
 
 std::uint32_t Renderer::index_pixel(int index) { return colour(kIndexPalette.data(), index); }
 
+void Renderer::render_metatile(const Scene& scene, int metatile, bool front, Image& out) {
+    const Machine& m = *scene.machine;
+    out.resize(16, 16);
+    std::fill(out.pixels.begin(), out.pixels.end(), 0u);
+    const std::uint16_t mt = static_cast<std::uint16_t>(m.ds.u16(Machine::kMetatileTable) + (metatile & 0x3FF) * 8);
+    for (int k = 0; k < 4; ++k) {
+        const TileRef ref{m.map_u16(static_cast<std::uint16_t>(mt + 2 * k))};
+        if (((ref.raw & 8) != 0) != front) continue;
+        const std::size_t tile = static_cast<std::size_t>(ref.tile());
+        const std::uint8_t* px = m.tiles.data() + tile * 64;
+        const std::uint8_t* mask = m.tile_masks.data() + ((tile * 8) & 0x1FFF);
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x) {
+                const int ty = ref.flip_y() ? 7 - y : y, tx = ref.flip_x() ? 7 - x : x;
+                const int plane = tx & 3, col = tx >> 2;
+                if (!(mask[plane * 2 + (ty >> 2)] & (0x80 >> ((ty & 3) * 2 + col)))) continue;
+                const int v = px[plane * 16 + ty * 2 + col];
+                out.pixels[static_cast<std::size_t>((k >> 1) * 8 + y) * 16 + (k & 1) * 8 + x] = index_pixel(v >= 16 ? v : v + ref.palette_row() * 16);
+            }
+    }
+}
+
 int Renderer::layer_index(std::uint32_t pixel) {
     if (!(pixel >> 24)) return -1;
     const int r = static_cast<int>(((pixel >> 16) & 0xFF) * 63 + 127) / 255, g = static_cast<int>(((pixel >> 8) & 0xFF) * 63 + 127) / 255;

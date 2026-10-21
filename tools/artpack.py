@@ -353,16 +353,18 @@ def cmd_nearest(args):
                 img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST).save(os.path.join(out, name))
             elif name.endswith(".pal"):
                 shutil.copy(os.path.join(sprites, name), out)
-    hud = os.path.join(args.export, "hud")
-    if os.path.isdir(hud) and not args.levels:
-        out = os.path.join(args.pack, "hud")
-        os.makedirs(out, exist_ok=True)
-        for name in os.listdir(hud):
+    for folder in ("hud", "font", "cells"):
+        src = os.path.join(args.export, folder)
+        if not os.path.isdir(src) or args.levels:
+            continue
+        dst = os.path.join(args.pack, folder)
+        os.makedirs(dst, exist_ok=True)
+        for name in os.listdir(src):
             if name.endswith(".png"):
-                img = Image.open(os.path.join(hud, name))
-                img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST).save(os.path.join(out, name))
+                img = Image.open(os.path.join(src, name))
+                img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST).save(os.path.join(dst, name))
             elif name.endswith(".pal"):
-                shutil.copy(os.path.join(hud, name), out)
+                shutil.copy(os.path.join(src, name), dst)
     print(f"round-trip pack written to {args.pack}")
 
 
@@ -372,6 +374,135 @@ def cmd_stitch_all(args):
         cmd_stitch_sprites(args)
     if os.path.exists(os.path.join(args.work, "hud", "manifest.json")):
         cmd_stitch_hud(args)
+    if os.path.exists(os.path.join(args.work, "font", "manifest.json")):
+        cmd_stitch_font(args)
+    if os.path.exists(os.path.join(args.work, "cells", "manifest.json")):
+        cmd_stitch_cells(args)
+
+
+# Changed cells -------------------------------------------------------------
+
+CELL_COLS = 10
+
+
+def cmd_split_cells(args):
+    """The alternate metatiles (<export>/cells, from blackthorne --metatiles;
+    with --only, just those listed in that cells.tsv) on magenta sheets."""
+    src = os.path.join(args.export, "cells")
+    names = sorted(n for n in os.listdir(src) if n.endswith(".png"))
+    if args.only:
+        wanted = set()
+        for line in open(args.only):
+            lvl, mt = line.split()
+            wanted.add("%X_%03x.png" % (int(lvl, 16), int(mt, 16)))
+        names = [n for n in names if n in wanted or n.split("_")[0] in args.whole.split(",")]
+    base = os.path.join(args.work, "cells")
+    os.makedirs(os.path.join(base, "in"), exist_ok=True)
+    os.makedirs(os.path.join(base, "out"), exist_ok=True)
+    pitch = 16 + GAP
+    rows = (224 - GAP) // pitch
+    sheets = []
+    for first in range(0, len(names), CELL_COLS * rows):
+        batch = names[first:first + CELL_COLS * rows]
+        used = (len(batch) + CELL_COLS - 1) // CELL_COLS
+        w, h = GAP + CELL_COLS * pitch, GAP + used * pitch
+        sheet = Image.new("RGB", (w * SCALE, h * SCALE), KEY)
+        cells = []
+        for i, name in enumerate(batch):
+            x, y = GAP + (i % CELL_COLS) * pitch, GAP + (i // CELL_COLS) * pitch
+            c = Image.open(os.path.join(src, name)).convert("RGBA").resize((16 * SCALE, 16 * SCALE), Image.NEAREST)
+            sheet.paste(c, (x * SCALE, y * SCALE), mask=c.getchannel("A"))
+            cells.append({"name": name, "x": x, "y": y})
+        sname = f"c_{first // (CELL_COLS * rows)}.png"
+        sheet.save(os.path.join(base, "in", sname))
+        sheets.append({"name": sname, "width": w, "height": h, "cells": cells})
+    with open(os.path.join(base, "manifest.json"), "w") as f:
+        json.dump({"scale": SCALE, "sheets": sheets}, f, indent=1)
+    print(f"cells: {len(names)} on {len(sheets)} sheets in {base}")
+
+
+def cmd_stitch_cells(args):
+    src = os.path.join(args.export, "cells")
+    base = os.path.join(args.work, "cells")
+    with open(os.path.join(base, "manifest.json")) as f:
+        m = json.load(f)
+    out = os.path.join(args.pack, "cells")
+    os.makedirs(out, exist_ok=True)
+    write_pack_json(args.pack)
+    done = 0
+    for sheet in m["sheets"]:
+        path = os.path.join(base, "out", sheet["name"])
+        if not os.path.exists(path):
+            continue
+        rgb = defringe(np.asarray(Image.open(path).convert("RGB").resize((sheet["width"] * SCALE, sheet["height"] * SCALE), Image.LANCZOS),
+                                  dtype=np.float64))
+        s = 16 * SCALE
+        for c in sheet["cells"]:
+            cell = rgb[c["y"] * SCALE:c["y"] * SCALE + s, c["x"] * SCALE:c["x"] * SCALE + s]
+            alpha = np.rint(smooth_alpha(Image.open(os.path.join(src, c["name"])).convert("RGBA").getchannel("A"), (s, s))).astype(np.uint8)
+            Image.fromarray(np.dstack([np.rint(cell).clip(0, 255).astype(np.uint8), alpha]), "RGBA").save(os.path.join(out, c["name"]))
+            done += 1
+    print(f"cells: {done}")
+
+
+# Fonts ---------------------------------------------------------------------
+
+FONT_COLS = 16
+
+
+def cmd_split_font(args):
+    """The glyphs of both fonts on two magenta sheets (16 per row)."""
+    src = os.path.join(args.export, "font")
+    base = os.path.join(args.work, "font")
+    os.makedirs(os.path.join(base, "in"), exist_ok=True)
+    os.makedirs(os.path.join(base, "out"), exist_ok=True)
+    sheets = []
+    for f in (0, 1):
+        names = sorted(n for n in os.listdir(src) if n.startswith(f"{f}_") and n.endswith(".png"))
+        pitch = 8 + 4
+        rows = (len(names) + FONT_COLS - 1) // FONT_COLS
+        w, h = 4 + FONT_COLS * pitch, 4 + rows * pitch
+        sheet = Image.new("RGB", (w * SCALE, h * SCALE), KEY)
+        cells = []
+        for i, name in enumerate(names):
+            x, y = 4 + (i % FONT_COLS) * pitch, 4 + (i // FONT_COLS) * pitch
+            g = Image.open(os.path.join(src, name)).convert("RGBA").resize((8 * SCALE, 8 * SCALE), Image.NEAREST)
+            sheet.paste(g, (x * SCALE, y * SCALE), mask=g.getchannel("A"))
+            cells.append({"name": name, "x": x, "y": y})
+        sheet.save(os.path.join(base, "in", f"font{f}.png"))
+        sheets.append({"name": f"font{f}.png", "font": f, "width": w, "height": h, "cells": cells})
+    with open(os.path.join(base, "manifest.json"), "w") as fo:
+        json.dump({"scale": SCALE, "sheets": sheets}, fo, indent=1)
+    print(f"fonts: {sum(len(sh['cells']) for sh in sheets)} glyphs on {len(sheets)} sheets in {base}")
+
+
+def cmd_stitch_font(args):
+    """Cuts the painted font sheets into the pack's font/<f>_<nnn>.png."""
+    src = os.path.join(args.export, "font")
+    base = os.path.join(args.work, "font")
+    with open(os.path.join(base, "manifest.json")) as fi:
+        m = json.load(fi)
+    out = os.path.join(args.pack, "font")
+    os.makedirs(out, exist_ok=True)
+    write_pack_json(args.pack)
+    shutil.copy(os.path.join(src, "font.pal"), out)
+    done = 0
+    for sheet in m["sheets"]:
+        path = os.path.join(base, "out", sheet["name"])
+        if not os.path.exists(path):
+            continue
+        rgb = defringe(np.asarray(Image.open(path).convert("RGB").resize((sheet["width"] * SCALE, sheet["height"] * SCALE), Image.LANCZOS),
+                                  dtype=np.float64))
+        s = 8 * SCALE
+        for c in sheet["cells"]:
+            cell = rgb[c["y"] * SCALE:c["y"] * SCALE + s, c["x"] * SCALE:c["x"] * SCALE + s]
+            if sheet["font"] == 0:  # the normal font fills its cell
+                alpha = np.full((s, s), 255, dtype=np.uint8)
+            else:
+                alpha = np.rint(smooth_alpha(Image.open(os.path.join(src, c["name"])).convert("RGBA").getchannel("A"), (s, s))).astype(np.uint8)
+            Image.fromarray(np.dstack([np.rint(cell).clip(0, 255).astype(np.uint8), alpha]), "RGBA").save(os.path.join(out, c["name"]))
+            done += 1
+    print(f"fonts: {done} glyphs")
 
 
 # HUD -----------------------------------------------------------------------
@@ -620,6 +751,26 @@ def main():
     s.add_argument("--no-match-light", dest="match_light", action="store_false")
     s.add_argument("--fill-gaps", action="store_true")
     s.set_defaults(func=cmd_stitch_all)
+    s = sub.add_parser("split-cells")
+    s.add_argument("export")
+    s.add_argument("work")
+    s.add_argument("--only", help="a cells.tsv (level, metatile in hex) of the cells to include")
+    s.add_argument("--whole", default="", help="levels whose alternates are all included anyway (comma separated)")
+    s.set_defaults(func=cmd_split_cells)
+    s = sub.add_parser("stitch-cells")
+    s.add_argument("export")
+    s.add_argument("work")
+    s.add_argument("pack")
+    s.set_defaults(func=cmd_stitch_cells)
+    s = sub.add_parser("split-font")
+    s.add_argument("export")
+    s.add_argument("work")
+    s.set_defaults(func=cmd_split_font)
+    s = sub.add_parser("stitch-font")
+    s.add_argument("export")
+    s.add_argument("work")
+    s.add_argument("pack")
+    s.set_defaults(func=cmd_stitch_font)
     s = sub.add_parser("split-hud")
     s.add_argument("export")
     s.add_argument("work")

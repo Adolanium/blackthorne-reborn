@@ -58,6 +58,42 @@ ArtPack::ArtPack(std::filesystem::path dir, bool background_loading) : dir_(std:
     std::ifstream pal(dir_ / "hud" / "hud.pal", std::ios::binary);
     pal.read(reinterpret_cast<char*>(hud_palette_.data()), static_cast<std::streamsize>(hud_palette_.size()));
     has_hud_ = static_cast<bool>(pal);
+    std::ifstream fpal(dir_ / "font" / "font.pal", std::ios::binary);
+    fpal.read(reinterpret_cast<char*>(font_palette_.data()), static_cast<std::streamsize>(font_palette_.size()));
+    has_font_ = static_cast<bool>(fpal);
+    has_cells_ = std::filesystem::is_directory(dir_ / "cells", ec);
+}
+
+const Image* ArtPack::cell(int level, int metatile) const {
+    if (!has_cells_) return nullptr;
+    const int key = level * 1024 + metatile;
+    auto it = cells_.find(key);
+    if (it == cells_.end()) {
+        char name[32];
+        std::snprintf(name, sizeof name, "%X_%03x.png", level, metatile);
+        auto img = std::make_unique<Image>();
+        std::error_code ec;
+        const std::filesystem::path path = dir_ / "cells" / name;
+        if (!std::filesystem::exists(path, ec) || !read_png(path, *img) || img->width != 16 * scale_ || img->height != 16 * scale_) img.reset();
+        it = cells_.emplace(key, std::move(img)).first;
+    }
+    return it->second.get();
+}
+
+const Image* ArtPack::glyph(int font, int index) const {
+    if (!has_font_) return nullptr;
+    const int key = font * 4096 + index;
+    auto it = glyphs_.find(key);
+    if (it == glyphs_.end()) {
+        char name[24];
+        std::snprintf(name, sizeof name, "%d_%03x.png", font, index);
+        auto img = std::make_unique<Image>();
+        std::error_code ec;
+        const std::filesystem::path path = dir_ / "font" / name;
+        if (!std::filesystem::exists(path, ec) || !read_png(path, *img) || img->width != 8 * scale_ || img->height != 8 * scale_) img.reset();
+        it = glyphs_.emplace(key, std::move(img)).first;
+    }
+    return it->second.get();
 }
 
 const Image* ArtPack::hud(const std::string& name, int width, int height) const {
@@ -204,11 +240,11 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
         const std::uint16_t base = ds.u16(background ? 0x25B2 : 0x25B0);
         const int row = background ? ds.u16(0x1CA0) : ds.u16(Machine::kMapRowBytes);
         const std::size_t at = static_cast<std::size_t>((base + my * row + mx * 2) & 0xFFFF);
-        if (m.map[at] != m.map_at_load[at] || m.map[(at + 1) & 0xFFFF] != m.map_at_load[(at + 1) & 0xFFFF]) return true;
+        if (m.map[at] != m.map_at_load[at] || m.map[(at + 1) & 0xFFFF] != m.map_at_load[(at + 1) & 0xFFFF]) return 2;
         const std::uint16_t mt = static_cast<std::uint16_t>(metatiles + (m.map_u16(static_cast<std::uint16_t>(at)) & 0x3FF) * 8);
         for (int k = 0; k < 4; ++k)
-            if (tile_changed[TileRef{m.map_u16(static_cast<std::uint16_t>(mt + 2 * k))}.tile() & 0x3FF]) return true;
-        return false;
+            if (tile_changed[TileRef{m.map_u16(static_cast<std::uint16_t>(mt + 2 * k))}.tile() & 0x3FF]) return 1;
+        return 0;
     };
 
     Image& play = play_;
@@ -269,16 +305,44 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
             for (int cx = 0; cx < cw; ++cx) {
                 const int mx = cx0 + cx, my = cy0 + cy;
                 const bool inside = mx >= 0 && my >= 0 && mx < lw && my < lh;
-                cells_[static_cast<std::size_t>(cy) * cw + cx] = !inside || changed(background, mx, my);
+                cells_[static_cast<std::size_t>(cy) * cw + cx] = static_cast<std::uint8_t>(!inside ? 1 : changed(background, mx, my));
             }
         for (int y = 0; y < H; ++y)
             for (int x = 0; x < W; ++x) {
                 const bool merged = background && full(x, y);
                 if (merged && front) continue;
                 const std::size_t i1 = static_cast<std::size_t>(y) * W + x;
-                const bool original = cells_[static_cast<std::size_t>(((oy + y) >> 4) - cy0) * cw + (((ox + x) >> 4) - cx0)] != 0;
+                const std::uint8_t state = cells_[static_cast<std::size_t>(((oy + y) >> 4) - cy0) * cw + (((ox + x) >> 4) - cx0)];
+                const bool original = state != 0;
                 const int idx = Renderer::layer_index(own.pixels[i1]);
                 const int front_idx = Renderer::layer_index(front_1x.pixels[i1]);
+                // A map cell the game changed: its painted metatile, if the pack has one.
+                if (state == 2 && pack_) {
+                    const int mx = (ox + x) >> 4, my = (oy + y) >> 4;
+                    const std::uint16_t lbase = ds.u16(background ? 0x25B2 : 0x25B0);
+                    const int row = background ? ds.u16(0x1CA0) : ds.u16(Machine::kMapRowBytes);
+                    const int mtv = m.map_u16(static_cast<std::uint16_t>(lbase + my * row + mx * 2)) & 0x3FF;
+                    const Image* cellp = pack_->cell(level, mtv);
+                    const int ci = merged && front_idx >= 0 ? front_idx : idx;
+                    if (cellp && !(ci >= 0 && unfollowable[static_cast<std::size_t>(ci)])) {
+                        const bool owner_front = front_idx >= 0 && !merged;
+                        if (owner_front != front || ci < 0) continue;
+                        const float* f = tint[static_cast<std::size_t>(ci)].data();
+                        const bool plain = identity[static_cast<std::size_t>(ci)];
+                        const int lx = (ox + x) & 15, ly = (oy + y) & 15;
+                        for (int yy = 0; yy < S; ++yy) {
+                            const std::uint32_t* src = &cellp->pixels[static_cast<std::size_t>(ly * S + yy) * cellp->width + lx * S];
+                            std::uint32_t* dst = &play.pixels[static_cast<std::size_t>(y * S + yy) * play.width + x * S];
+                            for (int xx = 0; xx < S; ++xx) {
+                                const std::uint32_t a = src[xx] >> 24;
+                                if (!a) continue;
+                                const std::uint32_t c = plain ? src[xx] : scale_rgb(src[xx], f);
+                                dst[xx] = a == 255 ? c : over(dst[xx], c);
+                            }
+                        }
+                        continue;
+                    }
+                }
                 if (!paint || original || (idx >= 0 && unfollowable[static_cast<std::size_t>(idx)]) ||
                     (merged && front_idx >= 0 && unfollowable[static_cast<std::size_t>(front_idx)])) {
                     original_pixel(x, y, idx, own4);
@@ -422,9 +486,30 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
     map_pass(true, true);
     map_pass(false, true);
     sprite_pass(3);
+    // Painted glyphs where the pack has them; the rest as before.
+    std::vector<bool> painted_cell(32 * 28, false);
+    if (pack_ && pack_->has_font() && opt.text) {
+        const int which = (ds.u16(0x1CF6) & 0x100) ? 1 : 0;
+        const auto& font = base_.font(which);
+        for (int cell = 0; cell < 32 * 28; ++cell) {
+            const std::uint16_t v = ds.u16(static_cast<std::uint16_t>(0x2D08 + cell * 2));
+            if (v == 0x20 || v >= font.size()) continue;
+            if (draw_glyph(scene, which, v, layers.shift + (cell % 32) * 8, (cell / 32) * 8, play)) painted_cell[static_cast<std::size_t>(cell)] = true;
+        }
+    }
+    auto text_only_unpainted = [&](Image& img) {  // clears painted cells from a 1x text layer copy
+        for (int cell = 0; cell < 32 * 28; ++cell) {
+            if (!painted_cell[static_cast<std::size_t>(cell)]) continue;
+            const int x0 = layers.shift + (cell % 32) * 8, y0 = (cell / 32) * 8;
+            for (int y = y0; y < y0 + 8; ++y)
+                std::fill_n(img.pixels.begin() + static_cast<std::ptrdiff_t>(y * img.width + x0), 8, 0u);
+        }
+    };
+    text1_ = layers.text;
+    text_only_unpainted(text1_);
     if (pack_ && pack_->smooth_text() && S == 4 && opt.text) {
         // Text rounded off: Scale2x twice, drawn over the playfield.
-        scale2x(layers.text, text2_);
+        scale2x(text1_, text2_);
         scale2x(text2_, text4_);
         for (int y = 0; y < play.height; ++y)
             for (int x = 0; x < play.width; ++x) {
@@ -432,7 +517,7 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                 if (p >> 24) play.pixels[static_cast<std::size_t>(y) * play.width + x] = p;
             }
     } else {
-        image_pass(layers.text, false);
+        image_pass(text1_, false);
     }
     // Widescreen: the columns beside the game screen are dimmed, as in
     // Renderer::render_screen.
@@ -546,8 +631,21 @@ void HdRenderer::draw_hud(const Scene& scene, const Image& classic, const std::a
         }
         if (di == selected) stamp(base_.selection_frame(), pack_->hud("selection", 32, 32), x, y, 0xF0);
     }
-    // The item name keeps the original font (rounded off with smooth_text).
+    // The item name: painted glyphs, else the original font (rounded off
+    // with smooth_text).
     const int cells = 16 + stretch / 8;
+    if (pack_->has_font()) {
+        const int item = ds.u16(static_cast<std::uint16_t>(0x1CB2 + selected));
+        const std::uint16_t names = ds.u16(static_cast<std::uint16_t>(0x579E + ds.u16(0x6A) * 2));
+        const int pad = stretch / 16;
+        bool all = true;
+        for (int c = 0; c < cells; ++c) {
+            const int i = c - pad;
+            const std::uint8_t ch = (i >= 0 && i < 16) ? ds.u8(static_cast<std::uint16_t>(names + item * 16 + i)) : ' ';
+            all = draw_glyph(scene, 0, ch - 0x20, 64 + c * 8, Renderer::kHeight + 4, page) && all;
+        }
+        if (all) return;
+    }
     if (pack_->smooth_text() && S == 4) {
         Image name1, name2, name4;
         name1.resize(cells * 8 + 2, 10);  // a pixel of the bar around it, for Scale2x's neighbours
@@ -565,6 +663,78 @@ void HdRenderer::draw_hud(const Scene& scene, const Image& classic, const std::a
         for (int y = Renderer::kHeight + 4; y < Renderer::kHeight + 12; ++y)
             for (int x = 64; x < 64 + cells * 8; ++x) block(x, y, classic.pixels[static_cast<std::size_t>(y) * classic.width + x]);
     }
+}
+
+bool HdRenderer::draw_glyph(const Scene& scene, int font, int index, int x, int y, Image& out) const {
+    const auto& glyphs = base_.font(font);
+    if (index < 0 || index >= static_cast<int>(glyphs.size())) return false;
+    const Renderer::Glyph& g = glyphs[static_cast<std::size_t>(index)];
+    const int S = scale_;
+    const Image* rep = pack_ ? pack_->glyph(font, index) : nullptr;
+    // The normal font's background is the glyph's commonest colour; a
+    // glyph of one colour (a text box's empty cell) is drawn flat, so the
+    // cells of a box don't show.
+    int counts[256] = {};
+    for (std::uint8_t v : g.pixels) ++counts[v];
+    int uniform = -1;  // the colour of a one-colour glyph
+    for (int v = 0; v < 256; ++v)
+        if (counts[v] == 64) uniform = v;
+    // The text background: the colour of glyph 0, the empty cell.
+    const int bgv = glyphs.empty() ? 0 : glyphs[0].pixels[0];
+    if (font == 0 && rep && uniform == bgv) rep = nullptr;
+    if (!rep) {
+        // Glyphs of one colour have no painting (or don't use it): the normal
+        // font fills the cell with that colour, captions draw nothing.
+        if (!pack_ || !pack_->has_font() || uniform < 0) return false;
+        if (font == 0)
+            for (int yy = y * S; yy < (y + 8) * S && yy < out.height; ++yy)
+                for (int xx = x * S; xx < (x + 8) * S && xx < out.width; ++xx)
+                    if (yy >= 0 && xx >= 0) out.pixels[static_cast<std::size_t>(yy) * out.width + xx] = pal_colour(scene.palette, uniform);
+        return true;
+    }
+    const std::array<std::uint8_t, 768>& painted_pal = pack_->font_palette();
+    for (int gy = 0; gy < 8; ++gy)
+        for (int gx = 0; gx < 8; ++gx) {
+            if (font == 1 && !g.set(gx, gy)) continue;  // captions: only where the mask is set
+            const int v = g.pixels[static_cast<std::size_t>(gy * 8 + gx)];
+            const std::uint32_t shown = pal_colour(scene.palette, v), painted = pal_colour(painted_pal.data(), v);
+            float f[3] = {1, 1, 1};
+            bool plain = true, follow = true;
+            for (int k = 0; k < 3; ++k) {
+                const int s = static_cast<int>((shown >> (16 - 8 * k)) & 0xFF), b = static_cast<int>((painted >> (16 - 8 * k)) & 0xFF);
+                f[k] = b ? static_cast<float>(s) / static_cast<float>(b) : 1.0f;
+                plain = plain && s == b;
+                follow = follow && (b != 0 || s == 0);
+            }
+            for (int yy = 0; yy < S; ++yy) {
+                const int py = (y + gy) * S + yy;
+                if (py < 0 || py >= out.height) continue;
+                for (int xx = 0; xx < S; ++xx) {
+                    const int px = (x + gx) * S + xx;
+                    if (px < 0 || px >= out.width) continue;
+                    std::uint32_t src = rep->pixels[static_cast<std::size_t>(gy * S + yy) * rep->width + gx * S + xx];
+                    if (!follow) src = shown;  // a colour the painting can't follow: the original's
+                    // The normal font's background: one flat colour where the painting
+                    // is darker than the letters, so the cells of a text box don't show.
+                    if (font == 0 && v == bgv && src != shown) {  // dark parts fade to the flat background, smoothly by brightness
+                        const float lum = static_cast<float>((src >> 16 & 0xFF) * 3 + (src >> 8 & 0xFF) * 6 + (src & 0xFF)) / 10.0f;
+                        const float t = std::clamp((lum - 70.0f) / 90.0f, 0.0f, 1.0f);
+                        const std::uint32_t bg = pal_colour(scene.palette, bgv);
+                        auto mixc = [&](int sh) {
+                            const float a = static_cast<float>((bg >> sh) & 0xFF), b = static_cast<float>((src >> sh) & 0xFF);
+                            return static_cast<std::uint32_t>(a + (b - a) * t + 0.5f) << sh;
+                        };
+                        src = (src & 0xFF000000u) | mixc(16) | mixc(8) | mixc(0);
+                    }
+                    const std::uint32_t a = src >> 24;
+                    if (!a) continue;
+                    const std::uint32_t c = plain ? src : scale_rgb(src, f);
+                    std::uint32_t& dst = out.pixels[static_cast<std::size_t>(py) * out.width + px];
+                    dst = a == 255 ? c : over(dst, c);
+                }
+            }
+        }
+    return true;
 }
 
 }  // namespace bt

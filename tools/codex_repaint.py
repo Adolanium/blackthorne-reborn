@@ -74,6 +74,24 @@ Use your image generation tool to repaint in.png in that style, then save it as 
 Keep the layout exactly: every frame, border, slot and box at the same place and size, because the game draws icons and text into them. The flat black boxes and slots stay flat black. Keep the same motifs (bones, skulls, rope) and colour family. {extra}No text, no border around the image.
 
 When out.png is saved, reply with only the word DONE.""",
+    "cells": """in.png is a sheet of map cells from a 1994 side-scrolling platformer, upscaled from pixel art, each on a flat magenta (#ff00ff) background: the tiles the game swaps into a level while playing (opened doors and gates, bridges, switches, broken walls, menu text and similar), each 16x16 game pixels. style.png shows the approved style of the game's repainted levels.
+
+Use your image generation tool to repaint the whole sheet in that style, then save it as out.png in the current folder at exactly {w}x{h} pixels.
+
+{style}
+
+Each cell keeps exactly its position, size and outline on the sheet, and its content stays recognisable (the same object, material and colours, and any letters stay the same letters). Cells are pieces of larger structures, so keep edges that continue to the cell border running to the border. Keep the magenta background flat magenta with clean edges. Do not add or remove cells.
+
+When out.png is saved, reply with only the word DONE.""",
+    "font": """in.png is the text font of a 1994 side-scrolling platformer, upscaled from pixel art: one character per cell on a flat magenta (#ff00ff) background, 16 cells per row: capital letters, digits, punctuation, a few symbols, and pieces of a dialogue box frame (corners and edges). style.png shows the approved style of the game's repainted art.
+
+Use your image generation tool to repaint the whole sheet as crisp hand-painted lettering in that style, then save it as out.png in the current folder at exactly {w}x{h} pixels.
+
+{style}
+
+Every character must stay exactly the same character, clearly legible, in the same cell, filling the cell the same way: the same letter shapes and stroke weights, only clean and smooth instead of pixelated (like a carved or engraved fantasy serif with a subtle bevel). Keep each cell's colours (the light letters, their dark outline or shadow, and any dark cell background). Frame pieces stay frame pieces that join up with their neighbours. Keep the magenta between cells flat magenta. Do not add, remove or swap characters.
+
+When out.png is saved, reply with only the word DONE.""",
     "sprites": """in.png is a sprite sheet from a 1994 side-scrolling platformer, upscaled from pixel art, on a flat magenta (#ff00ff) background: animation frames of characters, creatures, items and effects, some of them pieces of a larger character (a head, an arm, a weapon drawn separately). The hero is a muscular man with long black hair, a sleeveless vest, blue trousers, black boots and a shotgun. style.png is a sheet already repainted in the target style.
 
 Use your image generation tool to repaint the whole of in.png in that style, then save it as out.png in the current folder at exactly {w}x{h} pixels.
@@ -116,13 +134,23 @@ def shape_ok(src, out, kind):
     if not a.any():
         return True, 1.0
     iou = (a & b).sum() / max(1, (a | b).sum())
-    return iou >= (MIN_SHAPE if MIN_SHAPE is not None else 0.8 if kind in ("sprites", "hud") else 0.6), iou
+    return iou >= (MIN_SHAPE if MIN_SHAPE is not None else 0.8 if kind in ("sprites", "hud", "font", "cells") else 0.6), iou
 
 
 def jobs_in(work, only):
     jobs = []
     for level in sorted(os.listdir(work)):
-        if only and level not in only:
+        if only and level.upper() not in only:
+            continue
+        if level == "cells":
+            base = os.path.join(work, level)
+            for name in sorted(os.listdir(os.path.join(base, "in"))):
+                jobs.append(("cells", base, name))
+            continue
+        if level == "font":
+            base = os.path.join(work, level)
+            for name in sorted(os.listdir(os.path.join(base, "in"))):
+                jobs.append(("font", base, name))
             continue
         if level == "hud":
             base = os.path.join(work, level)
@@ -172,7 +200,7 @@ def run_job(job, args):
     w, h = Image.open(src).size
     label = os.path.relpath(src, args.work)
     jobdir = os.path.join(args.work, "_jobs", label.replace(os.sep, "_").replace(".png", ""))
-    style_ref = os.path.join(args.style, {"fg": "fg.png", "bg": "bg.png", "sprites": "sprites.png", "hud": "fg.png"}[kind])
+    style_ref = os.path.join(args.style, {"fg": "fg.png", "bg": "bg.png", "sprites": "sprites.png", "hud": "fg.png", "font": "fg.png", "cells": "fg.png"}[kind])
     for attempt in range(1, args.tries + 1):
         shutil.rmtree(jobdir, ignore_errors=True)
         os.makedirs(jobdir)
@@ -241,7 +269,7 @@ def main():
     args = p.parse_args()
     global MIN_SHAPE
     MIN_SHAPE = args.min_shape
-    only = {o.strip().upper() if o.strip() != "sprites" else "sprites" for o in args.only.split(",")} if args.only else None
+    only = {o.strip().upper() for o in args.only.split(",")} if args.only else None
     for name in ("fg.png", "bg.png", "sprites.png"):
         if not os.path.exists(os.path.join(args.style, name)):
             sys.exit(f"missing {os.path.join(args.style, name)}")

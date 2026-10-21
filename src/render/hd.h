@@ -28,6 +28,12 @@ namespace bt {
 //   <pack>/hud/icon_<nn>.png         item icon nn (hex; 00 is the empty slot)
 //   <pack>/hud/selection.png         the selection frame
 //   <pack>/hud/hud.pal               the palette the HUD was painted against
+//   <pack>/font/<f>_<nnn>.png        glyph nnn (hex) of font f (0 normal,
+//                                    1 captions), scale times 8x8
+//   <pack>/font/font.pal             the palette the glyphs were painted against
+//   <pack>/cells/<ID>_<mmm>.png      metatile mmm (hex) of level ID painted
+//                                    alone (scale times 16x16), drawn where
+//                                    the game changed a map cell to it
 // Missing files (or files of the wrong size) fall back to the original art.
 class ArtPack {
 public:
@@ -52,6 +58,12 @@ public:
     // pixels, or nullptr; hud_palette() is what it was painted against.
     const Image* hud(const std::string& name, int width, int height) const;
     bool has_hud() const { return has_hud_; }
+    // A painted metatile of a level, or nullptr.
+    const Image* cell(int level, int metatile) const;
+    // A painted glyph of font 0 or 1, or nullptr.
+    const Image* glyph(int font, int index) const;
+    bool has_font() const { return has_font_; }
+    const std::array<std::uint8_t, 768>& font_palette() const { return font_palette_; }
     const std::array<std::uint8_t, 768>& hud_palette() const { return hud_palette_; }
 
 private:
@@ -62,7 +74,10 @@ private:
     mutable int cached_level_ = -1;
     mutable std::map<std::pair<int, bool>, std::shared_future<std::shared_ptr<Image>>> cache_;  // null = not in the pack
     bool has_sprites_ = false;
-    bool has_hud_ = false;
+    bool has_hud_ = false, has_font_ = false, has_cells_ = false;
+    mutable std::map<int, std::unique_ptr<Image>> cells_;  // level * 1024 + metatile; nullptr = not in the pack
+    std::array<std::uint8_t, 768> font_palette_{};
+    mutable std::map<int, std::unique_ptr<Image>> glyphs_;  // font * 4096 + index; nullptr = not in the pack
     std::array<std::uint8_t, 768> hud_palette_{};
     mutable std::map<std::string, std::unique_ptr<Image>> hud_;  // nullptr = not in the pack
     mutable std::map<std::uint64_t, std::unique_ptr<Sprite>> sprites_;  // nullptr = not in the pack
@@ -79,11 +94,14 @@ public:
 
 private:
     void draw_hud(const Scene& scene, const Image& classic, const std::array<bool, 256>& cycled, Image& page) const;
+    // A painted glyph at (x, y) in game pixels of `out` (the playfield or the
+    // page), tinted against the font palette; false if the pack has none.
+    bool draw_glyph(const Scene& scene, int font, int index, int x, int y, Image& out) const;
     const Renderer& base_;
     const ArtPack* pack_;
     int scale_;
     // Buffers kept between frames.
-    mutable Image classic_, play_, page_, text2_, text4_;
+    mutable Image classic_, play_, page_, text1_, text2_, text4_;
     mutable Image smooth2_, smooth4_[4], part1_, part2_, part4_;  // smooth_fallback
     mutable Renderer::Layers layers_;
     mutable std::vector<std::uint8_t> cells_;
