@@ -215,7 +215,8 @@ def run_job(job, args):
         start = time.time()
         with open(os.path.join(jobdir, "prompt.txt")) as stdin, open(os.path.join(jobdir, "codex.log"), "w") as logf:
             try:
-                r = subprocess.run([shutil.which(args.codex) or args.codex, "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", jobdir,
+                model = ["-m", args.model] if args.model else []
+                r = subprocess.run([shutil.which(args.codex) or args.codex, "exec", *model, "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", jobdir,
                                     "-i", "in.png", "style.png"], stdin=stdin, stdout=logf, stderr=subprocess.STDOUT,
                                    timeout=args.timeout)
                 code = r.returncode
@@ -263,6 +264,7 @@ def main():
     p.add_argument("--tries", type=int, default=3)
     p.add_argument("--timeout", type=int, default=1200, help="seconds per Codex run")
     p.add_argument("--codex", default="codex")
+    p.add_argument("--model", help="Codex model (default: Codex's configured one)")
     p.add_argument("--min-shape", type=float, help="the least overlap of painted and original shape to accept")
     p.add_argument("--note", help="an extra instruction added to every prompt")
     p.add_argument("--redo", help="comma-separated input names (like 0_576.png) to repaint even if done")
