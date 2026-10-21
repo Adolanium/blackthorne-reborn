@@ -503,6 +503,7 @@ def cmd_stitch_cells(args):
 # Kyle's poses ---------------------------------------------------------------
 
 POSE_CELL = 64  # game pixels per pose cell on a sheet (256 at 4x)
+KYLE_BANK = "42"  # the sprite resource of Kyle's animations
 
 
 def cmd_split_poses(args):
@@ -552,8 +553,9 @@ def cmd_split_poses(args):
                     key, size, x, y, mirror = q.split(",")
                     parts.append({"key": key, "size": int(size), "x": int(x), "y": int(y), "mirror": mirror == "1"})
                 cells.append({"pose": name, "x": cx, "y": cy, "w": w, "h": h, "parts": parts})
-            n = sum(1 for sh in sheets if sh["name"].startswith(f"e_{bank}_"))
-            sname = f"p_{len(sheets):03d}.png" if first_run else f"e_{bank}_{n:02d}.png"
+            prefix = "k" if bank == KYLE_BANK else "e"  # Kyle's sheets get his own prompt
+            n = sum(1 for sh in sheets if sh["name"].startswith(f"{prefix}_{bank}_"))
+            sname = f"p_{len(sheets):03d}.png" if first_run else f"{prefix}_{bank}_{n:02d}.png"
             sheet.save(os.path.join(base, "in", sname))
             sheets.append({"name": sname, "cell": cell, "bank": bank, "width": cols * cell, "height": n_rows * cell, "cells": cells})
             count += len(cells)
