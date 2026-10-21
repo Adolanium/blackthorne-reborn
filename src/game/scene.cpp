@@ -24,7 +24,8 @@ bool match_pose(const bt::Scene& scene, int slot, PoseMatch& out) {
     const bt::DataSegment& ds = m.ds;
     const int first = ds.u16(static_cast<std::uint16_t>(0x198A + slot)), count = ds.u16(static_cast<std::uint16_t>(0x19B2 + slot));
     if (count <= 0 || count > 16 || first > 0xFE) return false;
-    out = {};
+    out = PoseMatch{};
+    out.slot = slot;
     int priority = -1;
     for (int i = 0, p = first; i < count && p <= 0xFE; ++i, p += 2) {
         const std::uint16_t attr = ds.field(0x452, p);
@@ -86,6 +87,7 @@ SceneRenderer::SceneRenderer(SDL_Renderer* sdl, const bt::Renderer& base, const 
 
 SceneRenderer::~SceneRenderer() {
     free_level();
+    if (overlay_tex_) SDL_DestroyTexture(overlay_tex_);
     for (auto* m : {&poses_}) for (auto& [k, t] : *m) if (t) SDL_DestroyTexture(t);
     for (auto& [k, t] : parts_) if (t) SDL_DestroyTexture(t);
     for (auto& [k, t] : glyphs_) if (t) SDL_DestroyTexture(t);
@@ -276,6 +278,184 @@ void SceneRenderer::update_cells(const bt::Scene& scene) {
         }
 }
 
+SceneRenderer::Camera SceneRenderer::camera(const bt::Scene& scene, int extra) const {
+    const bt::DataSegment& ds = scene.machine->ds;
+    auto s16 = [&](std::uint16_t a) { return static_cast<int>(static_cast<std::int16_t>(ds.u16(a))); };
+    const int W = bt::Renderer::kWidth + 2 * extra, screen_w = bt::Renderer::kScreenWidth + 2 * extra;
+    Camera c;
+    const int cam_x = s16(0x1B4E);
+    c.cam_y = s16(0x1B50);
+    const int map_px = ds.u16(bt::Machine::kMapWidth) * 16;
+    c.view_x = cam_x - extra;
+    if (extra) c.view_x = map_px >= W ? std::clamp(c.view_x, 0, map_px - W) : (map_px - W) / 2;
+    c.shift = cam_x - c.view_x;
+    c.bg_x = s16(0x1B52) - c.shift;
+    c.bg_y = s16(0x1B54);
+    c.play_x = (ds.u16(0x1CF6) & 1) ? 0 : (screen_w - W) / 2;
+    return c;
+}
+
+void SceneRenderer::tick(const bt::Scene& scene, int extra) {
+    prev_ = cur_;
+    cur_ = Snap{};
+    cur_.valid = true;
+    cur_.level = scene.machine->ds.u16(0x1CA4);
+    cur_.cam = camera(scene, extra);
+    for (int slot = 0; slot < 0x28; slot += 2) {
+        PoseMatch pm;
+        if (match_pose(scene, slot, pm)) cur_.actors[slot] = {pm.x0, pm.y0};
+    }
+}
+
+void SceneRenderer::analyse(const bt::Scene& scene, int extra) {
+    const bt::Machine& m = *scene.machine;
+    const bt::DataSegment& ds = m.ds;
+    bt::RenderOptions opt;
+    opt.extra = extra;
+    base_.render_layers(scene, opt, layers_);
+    const Camera c = camera(scene, extra);
+    const int W = layers_.foreground_back.width, H = bt::Renderer::kHeight;
+    const int screen_w = bt::Renderer::kScreenWidth + 2 * extra;
+    play_x_ = c.play_x;
+    play_w_ = W;
+    // Colours in palette cycles: water, fire, lava.
+    std::array<bool, 256> cycled{};
+    for (int si = 0; si < 0x10; si += 2) {
+        if (!(ds.u16(0x1B86) & ds.u16(static_cast<std::uint16_t>(0x288A + si)))) continue;
+        const int a = ds.u16(static_cast<std::uint16_t>(0x1BB8 + si)) & 0xFF, b = ds.u16(static_cast<std::uint16_t>(0x1BC8 + si)) & 0xFF;
+        for (int i = std::min(a, b); i <= std::max(a, b); ++i) cycled[static_cast<std::size_t>(i)] = true;
+    }
+    auto bright = [](std::uint32_t p) {
+        return (0.30f * static_cast<float>((p >> 16) & 0xFF) + 0.59f * static_cast<float>((p >> 8) & 0xFF) + 0.11f * static_cast<float>(p & 0xFF)) / 255.0f;
+    };
+    auto warm = [](std::uint32_t p) {
+        const int r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
+        return r > 110 && r > b + 40 && g < r + 10;
+    };
+    emission_.resize(screen_w, bt::Renderer::kScreenHeight);
+    std::fill(emission_.pixels.begin(), emission_.pixels.end(), 0u);
+    ui_.resize(screen_w, bt::Renderer::kScreenHeight);
+    std::fill(ui_.pixels.begin(), ui_.pixels.end(), 0u);
+    overlay_.resize(W, H);
+    std::fill(overlay_.pixels.begin(), overlay_.pixels.end(), 0u);
+    auto emit = [&](int x, int y, std::uint32_t col, float strength) {
+        const std::uint32_t a = static_cast<std::uint32_t>(std::clamp(strength, 0.0f, 1.0f) * 255.0f);
+        emission_.pixels[static_cast<std::size_t>(y) * emission_.width + play_x_ + x] = (a << 24) | (col & 0xFFFFFFu);
+    };
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            const std::size_t i = static_cast<std::size_t>(y) * W + x;
+            bool sprite_front = false;
+            for (int k = 1; k < 4; ++k) sprite_front = sprite_front || (layers_.sprites[k].pixels[i] >> 24);
+            // The map colour on top here.
+            int v = -1;
+            for (const bt::Image* l : {&layers_.foreground_front, &layers_.foreground_back, &layers_.background_front, &layers_.background_back}) {
+                v = bt::Renderer::layer_index(l->pixels[i]);
+                if (v >= 0) break;
+            }
+            if (v >= 0 && cycled[static_cast<std::size_t>(v)]) {
+                const std::uint32_t col = pal(scene.palette, v);
+                if (warm(col)) emit(x, y, col, bright(col) * 1.4f);
+                if (!sprite_front) overlay_.pixels[i] = (static_cast<std::uint32_t>(warm(col) ? 120 : 105) << 24) | (col & 0xFFFFFFu);
+            }
+            // Sprites light the scene only when near white: muzzle flashes,
+            // explosions, magic (skin and clothes don't).
+            for (int k = 0; k < 4; ++k) {
+                const std::uint32_t p = layers_.sprites[k].pixels[i];
+                if (!(p >> 24)) continue;
+                const float l = bright(p);
+                const int r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
+                if (l > 0.9f && std::min({r, g, b}) > 190) emit(x, y, p, l);
+            }
+        }
+    // Text cells and whole dialogue boxes stay unlit.
+    for (int row = 0; row < 28; ++row) {
+        int first = -1, last = -1;
+        bool frame = false;
+        for (int col = 0; col < 32; ++col) {
+            const std::uint16_t v = ds.u16(static_cast<std::uint16_t>(0x2D08 + (row * 32 + col) * 2));
+            if (v == 0x20) continue;
+            if (first < 0) first = col;
+            last = col;
+            frame = frame || (v >= 1 && v <= 8);
+            for (int y = row * 8; y < row * 8 + 8; ++y)
+                for (int x = col * 8; x < col * 8 + 8; ++x) {
+                    const int sx = play_x_ + c.shift + x;
+                    if (sx >= 0 && sx < ui_.width) ui_.pixels[static_cast<std::size_t>(y) * ui_.width + sx] = 0xFFFFFFFFu;
+                }
+        }
+        if (!frame) continue;
+        for (int y = row * 8; y < row * 8 + 8; ++y)
+            for (int x = first * 8; x < last * 8 + 8; ++x) {
+                const int sx = play_x_ + c.shift + x;
+                if (sx >= 0 && sx < ui_.width) ui_.pixels[static_cast<std::size_t>(y) * ui_.width + sx] = 0xFFFFFFFFu;
+            }
+    }
+    for (std::size_t i = 0; i < ui_.pixels.size(); ++i)
+        if (ui_.pixels[i]) emission_.pixels[i] = 0u;
+    // The animated layer as a texture (smoothly scaled).
+    float tw = 0, th = 0;
+    if (overlay_tex_) SDL_GetTextureSize(overlay_tex_, &tw, &th);
+    if (!overlay_tex_ || static_cast<int>(tw) != W || static_cast<int>(th) != H) {
+        if (overlay_tex_) SDL_DestroyTexture(overlay_tex_);
+        overlay_tex_ = SDL_CreateTexture(sdl_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, W, H);
+        if (overlay_tex_) {
+            SDL_SetTextureBlendMode(overlay_tex_, SDL_BLENDMODE_BLEND);
+            SDL_SetTextureScaleMode(overlay_tex_, SDL_SCALEMODE_LINEAR);
+        }
+    }
+    // Soften it, more along the fall of water than across, so the cycling
+    // reads as flowing streaks and flicker rather than a pixel pattern.
+    {
+        std::vector<float> acc(static_cast<std::size_t>(W) * H * 4, 0.0f), tmp(acc.size());
+        for (std::size_t i = 0; i < overlay_.pixels.size(); ++i) {
+            const std::uint32_t p = overlay_.pixels[i];
+            const float a = static_cast<float>(p >> 24) / 255.0f;
+            acc[i * 4] = static_cast<float>((p >> 16) & 0xFF) * a;
+            acc[i * 4 + 1] = static_cast<float>((p >> 8) & 0xFF) * a;
+            acc[i * 4 + 2] = static_cast<float>(p & 0xFF) * a;
+            acc[i * 4 + 3] = a;
+        }
+        auto pass = [&](int rx, int ry) {
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x) {
+                    float sum[4] = {};
+                    int n = 0;
+                    for (int dy = -ry; dy <= ry; ++dy)
+                        for (int dx = -rx; dx <= rx; ++dx) {
+                            const int xx = x + dx, yy = y + dy;
+                            if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+                            for (int k = 0; k < 4; ++k) sum[k] += acc[(static_cast<std::size_t>(yy) * W + xx) * 4 + static_cast<std::size_t>(k)];
+                            ++n;
+                        }
+                    for (int k = 0; k < 4; ++k) tmp[(static_cast<std::size_t>(y) * W + x) * 4 + static_cast<std::size_t>(k)] = sum[k] / static_cast<float>(n);
+                }
+            acc.swap(tmp);
+        };
+        pass(1, 2);
+        for (std::size_t i = 0; i < overlay_.pixels.size(); ++i) {
+            const float a = acc[i * 4 + 3];
+            if (a <= 0.0f) {
+                overlay_.pixels[i] = 0u;
+                continue;
+            }
+            auto ch = [&](int k) { return static_cast<std::uint32_t>(std::clamp(acc[i * 4 + static_cast<std::size_t>(k)] / a, 0.0f, 255.0f)); };
+            overlay_.pixels[i] = (static_cast<std::uint32_t>(std::clamp(a, 0.0f, 1.0f) * 255.0f) << 24) | (ch(0) << 16) | (ch(1) << 8) | ch(2);
+        }
+    }
+    if (overlay_tex_) SDL_UpdateTexture(overlay_tex_, nullptr, overlay_.pixels.data(), W * 4);
+    // The camera as draw() will place it (smooth motion).
+    view_xf_ = static_cast<float>(c.view_x);
+    view_yf_ = static_cast<float>(c.cam_y);
+    if (prev_.valid && cur_.valid && prev_.level == cur_.level) {
+        const float dx = static_cast<float>(prev_.cam.view_x - cur_.cam.view_x), dy = static_cast<float>(prev_.cam.cam_y - cur_.cam.cam_y);
+        if (std::abs(dx) < 48 && std::abs(dy) < 48) {
+            view_xf_ += dx * (1.0f - interp);
+            view_yf_ += dy * (1.0f - interp);
+        }
+    }
+}
+
 void SceneRenderer::draw_tex(SDL_Texture* t, float x, float y, float w, float h, bool flip) {
     if (!t) return;
     SDL_SetTextureColorMod(t, mod_[0], mod_[1], mod_[2]);
@@ -290,14 +470,12 @@ void SceneRenderer::draw(const bt::Scene& scene, const SDL_FRect& dst, int extra
     const int W = bt::Renderer::kWidth + 2 * extra, H = bt::Renderer::kHeight;
     const int screen_w = bt::Renderer::kScreenWidth + 2 * extra;
     const bool hud = ds.u16(0x1CF6) & 1;
-    // The camera, as Renderer::render computes it.
-    const int cam_x = s16(0x1B4E), cam_y = s16(0x1B50);
-    const int map_px = ds.u16(bt::Machine::kMapWidth) * 16;
-    int view_x = cam_x - extra;
-    if (extra) view_x = map_px >= W ? std::clamp(view_x, 0, map_px - W) : (map_px - W) / 2;
-    const int shift = cam_x - view_x;
-    const int bg_x = s16(0x1B52) - shift, bg_y = s16(0x1B54);
-    const int play_x = hud ? 0 : (screen_w - W) / 2;
+    const Camera cm = camera(scene, extra);
+    const int shift = cm.shift, play_x = cm.play_x;
+    // Smooth motion: the camera between the last two ticks (analyse()).
+    const float view_x = view_xf_, cam_y = view_yf_;
+    const float cdx = view_x - static_cast<float>(cm.view_x), cdy = cam_y - static_cast<float>(cm.cam_y);
+    const float bg_x = static_cast<float>(cm.bg_x) + cdx, bg_y = static_cast<float>(cm.bg_y) + cdy;
     const int shake_x = s16(0x344), shake_y = s16(0x346);
     k_ = dst.w / static_cast<float>(screen_w);
     ox_ = dst.x - static_cast<float>(shake_x) * k_;
@@ -316,11 +494,11 @@ void SceneRenderer::draw(const bt::Scene& scene, const SDL_FRect& dst, int extra
     const SDL_Rect clip{static_cast<int>(ox_ + static_cast<float>(play_x) * k_), static_cast<int>(oy_), static_cast<int>(static_cast<float>(W) * k_ + 0.5f),
                         static_cast<int>(static_cast<float>(H) * k_ + 0.5f)};
     SDL_SetRenderClipRect(sdl_, &clip);
-    auto world = [&](float wx, float wy) { return std::make_pair(static_cast<float>(play_x) + wx - static_cast<float>(view_x), wy - static_cast<float>(cam_y)); };
+    auto world = [&](float wx, float wy) { return std::make_pair(static_cast<float>(play_x) + wx - view_x, wy - cam_y); };
     float tw = 0, th = 0;
     if (bg_) {
         SDL_GetTextureSize(bg_, &tw, &th);
-        draw_tex(bg_, static_cast<float>(play_x - bg_x), static_cast<float>(-bg_y), tw / S, th / S);
+        draw_tex(bg_, static_cast<float>(play_x) - bg_x, -bg_y, tw / S, th / S);
     }
     // Actors as whole poses where the pack has them; other parts one by one.
     std::vector<PoseMatch> poses;
@@ -337,8 +515,16 @@ void SceneRenderer::draw(const bt::Scene& scene, const SDL_FRect& dst, int extra
             if (pm.priority != priority) continue;
             const auto& idx = pose_index_[pm.name];
             const float cell = static_cast<float>(idx[4]);
-            const float left = pm.flip ? static_cast<float>(pm.x1 + idx[0]) - cell : static_cast<float>(pm.x0 - idx[0]);
-            const auto [sx, sy] = world(left, static_cast<float>(pm.y0 - idx[1]));
+            float left = pm.flip ? static_cast<float>(pm.x1 + idx[0]) - cell : static_cast<float>(pm.x0 - idx[0]);
+            float top = static_cast<float>(pm.y0 - idx[1]);
+            // Smooth motion: from where this actor was on the previous tick.
+            auto pa = prev_.actors.find(pm.slot);
+            auto ca = cur_.actors.find(pm.slot);
+            if (prev_.valid && pa != prev_.actors.end() && ca != cur_.actors.end() && ca->second == std::make_pair(pm.x0, pm.y0)) {
+                const float dx = static_cast<float>(pa->second.first - pm.x0), dy = static_cast<float>(pa->second.second - pm.y0);
+                if (std::abs(dx) < 24 && std::abs(dy) < 24) left += dx * (1.0f - interp), top += dy * (1.0f - interp);
+            }
+            const auto [sx, sy] = world(left, top);
             draw_tex(pose_texture(pm.name), sx, sy, cell, cell, pm.flip);
         }
         bt::Renderer::parts(scene, priority, loose);  // in drawing order, like the original
@@ -358,6 +544,11 @@ void SceneRenderer::draw(const bt::Scene& scene, const SDL_FRect& dst, int extra
         SDL_GetTextureSize(fg_, &tw, &th);
         const auto [sx, sy] = world(0, 0);
         draw_tex(fg_, sx, sy, tw / S, th / S);
+    }
+    // The animated fire and water: the game's colour cycles over the painting.
+    if (overlay_tex_) {
+        const auto [sx, sy] = world(static_cast<float>(cm.view_x), static_cast<float>(cm.cam_y));
+        draw_tex(overlay_tex_, sx, sy, static_cast<float>(W), static_cast<float>(H));
     }
     actors(1);
     actors(2);

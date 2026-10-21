@@ -228,10 +228,20 @@ on the GPU, not by rebuilding the original's pixels:
 - Everything is drawn at the window's resolution with smooth scaling; fades
   are a colour modulation of everything.
 
-It is used when the pack has `poses/`; `--legacy-hd` keeps the pixel-based
-HD renderer. Still to come: whole poses for the other characters, the
-lighting pass on the scene, animated water and fire, and smooth motion
-between game frames.
+- **Lighting**: the scene is drawn into a texture and shown through the
+  lighting pass. `analyse()` looks at the game state at 1x each frame: fire
+  (warm colours in palette cycles) and near-white effect sprites as light
+  sources, text boxes as the UI mask.
+- **Animated fire and water**: the game's colour cycles (waterfalls,
+  torches, lava), softened along the fall of water, drawn over the
+  painting, so the static paintings flow and flicker.
+- **Smooth motion**: after each game tick the camera's and every actor's
+  place are kept; frames between ticks place them part of the way from the
+  previous tick (`interp`), so scrolling and movement are fluid at the
+  display's rate while the game still steps at its own. Big jumps snap.
+
+It is used when the pack has `poses/` (every character's whole poses);
+`--legacy-hd` keeps the pixel-based HD renderer.
 
 ## Lighting and atmosphere
 

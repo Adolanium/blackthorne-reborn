@@ -10,6 +10,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@ struct PoseMatch {
     int x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // the pose box in world pixels
     bool flip = false;                   // facing left: the pose is stored facing right
     int priority = 0;
+    int slot = 0;                            // the actor slot it belongs to
     std::vector<bt::Renderer::Part> parts;  // as drawn, first on top
     std::vector<int> offsets;               // their part pool offsets
 };
@@ -47,7 +49,35 @@ public:
     // render target. `extra`: widescreen columns per side (game pixels).
     void draw(const bt::Scene& scene, const SDL_FRect& dst, int extra);
 
+    // Smooth motion: called after each game tick, it keeps the camera's and
+    // the actors' places from that tick and the one before; draw() places
+    // things `interp` (0..1) of the way from the previous tick to the latest.
+    void tick(const bt::Scene& scene, int extra);
+    float interp = 1.0f;
+
+    // The frame's look at the game state, at 1x (screen pixels), before
+    // draw(): light sources (fire in palette cycles, bright effects), the
+    // UI mask (text boxes), and the animated fire and water layer.
+    void analyse(const bt::Scene& scene, int extra);
+    const bt::Image& emission() const { return emission_; }
+    const bt::Image& ui_mask() const { return ui_; }
+    int play_x() const { return play_x_; }
+    int play_w() const { return play_w_; }
+    float view_x() const { return view_xf_; }
+    float view_y() const { return view_yf_; }
+
 private:
+    struct Camera {
+        int view_x = 0, cam_y = 0, bg_x = 0, bg_y = 0, shift = 0, play_x = 0;
+    };
+    Camera camera(const bt::Scene& scene, int extra) const;
+    struct Snap {
+        bool valid = false;
+        int level = -1;
+        Camera cam;
+        std::map<int, std::pair<int, int>> actors;  // slot -> pose box top left
+    };
+    Snap prev_, cur_;
     struct Placed {
         float x, y, w, h;
     };
@@ -68,7 +98,11 @@ private:
     int cell_ = 64, scale_ = 4;
 
     int level_ = -1;
-    SDL_Texture *bg_ = nullptr, *fg_ = nullptr, *front_ = nullptr;
+    SDL_Texture *bg_ = nullptr, *fg_ = nullptr, *front_ = nullptr, *overlay_tex_ = nullptr;
+    bt::Renderer::Layers layers_;
+    bt::Image emission_, ui_, overlay_;
+    int play_x_ = 0, play_w_ = 0;
+    float view_xf_ = 0, view_yf_ = 0;
     const bt::Image* fg_img_ = nullptr;  // the level's foreground painting
     bt::Image front_img_;
     std::vector<int> applied_;                    // the metatile each fg cell shows in the texture

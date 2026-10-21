@@ -103,7 +103,20 @@ public:
 
     // Builds the light maps for this frame and sets the pass's parameters;
     // false if the pass can't run.
+    // What the pass needs from a renderer: its light sources and UI mask
+    // (screen pixels), where the playfield is and what it shows.
+    struct Input {
+        const bt::Image& emission;
+        const bt::Image& ui;
+        int play_x, play_w;
+        float view_x, view_y;
+    };
     bool prepare(const bt::HdRenderer& hd, int level, int frame_w, int frame_h, int scale, double seconds) {
+        return prepare(Input{hd.emission(), hd.ui_mask(), hd.playfield_x(), hd.playfield_w(), static_cast<float>(hd.view_x()),
+                             static_cast<float>(hd.view_y())},
+                       level, frame_w, frame_h, scale, seconds);
+    }
+    bool prepare(const Input& in, int level, int frame_w, int frame_h, int scale, double seconds) {
         if (!available()) return false;
         // Embers: world-anchored, reset on a new level.
         if (level != level_) embers_.clear();
@@ -111,12 +124,12 @@ public:
         // Headless runs go faster than real time: one game frame per draw.
         const float dt = fixed_dt > 0 ? fixed_dt : last_ > 0 ? static_cast<float>(std::clamp(seconds - last_, 0.0, 0.1)) : 0.0f;
         last_ = seconds;
-        embers_.update(hd.emission(), hd.playfield_x(), hd.view_x(), hd.view_y(), dt);
+        embers_.update(in.emission, in.play_x, static_cast<int>(in.view_x), static_cast<int>(in.view_y), dt);
         sparks_.clear();
         for (const bt::Particle& e : embers_.particles()) {
-            const float x = static_cast<float>(hd.playfield_x()) + e.x - static_cast<float>(hd.view_x());
-            const float y = e.y - static_cast<float>(hd.view_y());
-            if (x < static_cast<float>(hd.playfield_x()) || x >= static_cast<float>(hd.playfield_x() + hd.playfield_w()) || y < 0 ||
+            const float x = static_cast<float>(in.play_x) + e.x - in.view_x;
+            const float y = e.y - in.view_y;
+            if (x < static_cast<float>(in.play_x) || x >= static_cast<float>(in.play_x + in.play_w) || y < 0 ||
                 y >= static_cast<float>(bt::Renderer::kHeight))
                 continue;
             // Hot when fresh (yellow-white), cooling to the fire's own colour.
@@ -130,8 +143,8 @@ public:
             sparks_.push_back({x * static_cast<float>(scale), y * static_cast<float>(scale), e.size * static_cast<float>(scale) * 3.5f, colour,
                                std::min(1.0f, fade * 1.6f)});
         }
-        bt::build_light_maps(hd.emission(), maps_);
-        const bt::Image& ui = hd.ui_mask();
+        bt::build_light_maps(in.emission, maps_);
+        const bt::Image& ui = in.ui;
         if (!light_ || light_->w != maps_.light.width || light_->h != maps_.light.height || glow_->w != maps_.glow.width ||
             glow_->h != maps_.glow.height || ui_->w != ui.width || ui_->h != ui.height) {
             release();
@@ -161,8 +174,8 @@ public:
         SDL_UpdateTexture(glow_, nullptr, maps_.glow.pixels.data(), maps_.glow.width * 4);
         SDL_UpdateTexture(ui_, nullptr, ui.pixels.data(), ui.width * 4);
         bt::LightParams p{};
-        const float x0 = static_cast<float>(hd.playfield_x() * scale) / static_cast<float>(frame_w);
-        const float x1 = static_cast<float>((hd.playfield_x() + hd.playfield_w()) * scale) / static_cast<float>(frame_w);
+        const float x0 = static_cast<float>(in.play_x * scale) / static_cast<float>(frame_w);
+        const float x1 = static_cast<float>((in.play_x + in.play_w) * scale) / static_cast<float>(frame_w);
         const float y1 = static_cast<float>(bt::Renderer::kHeight * scale) / static_cast<float>(frame_h);
         const float pf[4] = {x0, 0.0f, x1, y1};
         // How dark each area is without its lights: the mines and Sarlac's
@@ -179,7 +192,7 @@ public:
         std::copy_n(amb, 4, p.ambient);
         std::copy_n(gl, 4, p.glow);
         std::copy_n(misc, 4, p.misc);
-        const float view[4] = {static_cast<float>(hd.view_x()), static_cast<float>(hd.view_y()), 1.0f / static_cast<float>(frame_w),
+        const float view[4] = {in.view_x, in.view_y, 1.0f / static_cast<float>(frame_w),
                                1.0f / static_cast<float>(frame_h)};
         const float relief[4] = {0.85f, 0, 0, 0};
         std::copy_n(view, 4, p.view);
@@ -230,7 +243,7 @@ class Display {
 public:
     explicit Display(SDL_Renderer* sdl) : sdl_(sdl) {}
     ~Display() {
-        for (SDL_Texture* t : {source_, prescaled_, dot_}) if (t) SDL_DestroyTexture(t);
+        for (SDL_Texture* t : {source_, prescaled_, dot_, target_}) if (t) SDL_DestroyTexture(t);
     }
     Filter filter = Filter::Sharp;
     SDL_GPURenderState* effect = nullptr;  // a lighting pass for the final draw (set per frame)
@@ -249,7 +262,22 @@ public:
                                 std::floor(frame.height * s)};
             SDL_SetRenderDrawColor(sdl_, 0, 0, 0, 255);
             SDL_RenderClear(sdl_);
-            scene_draw(dst);
+            if (effect) {
+                // Drawn into a texture first, then shown through the lighting pass.
+                target_ = fit(target_, static_cast<int>(dst.w), static_cast<int>(dst.h), SDL_TEXTUREACCESS_TARGET);
+                SDL_SetTextureScaleMode(target_, SDL_SCALEMODE_LINEAR);
+                SDL_SetRenderTarget(sdl_, target_);
+                SDL_SetRenderDrawColor(sdl_, 0, 0, 0, 255);
+                SDL_RenderClear(sdl_);
+                scene_draw(SDL_FRect{0, 0, dst.w, dst.h});
+                SDL_SetRenderTarget(sdl_, nullptr);
+                SDL_SetGPURenderState(sdl_, effect);
+                SDL_RenderTexture(sdl_, target_, nullptr, &dst);
+                SDL_SetGPURenderState(sdl_, nullptr);
+                if (sparks && !sparks->empty()) draw_sparks(dst, frame.width);
+            } else {
+                scene_draw(dst);
+            }
             if (flip) SDL_RenderPresent(sdl_);
             return;
         }
@@ -326,6 +354,7 @@ private:
         }
     }
     SDL_Texture* dot_ = nullptr;
+    SDL_Texture* target_ = nullptr;  // the scene renderer's picture, for the lighting pass
     SDL_Texture* fit(SDL_Texture* t, int w, int h, SDL_TextureAccess access) {
         if (t && t->w == w && t->h == h) return t;
         if (t) SDL_DestroyTexture(t);
@@ -996,6 +1025,12 @@ int main(int argc, char** argv) {
             out.resize(bt::Renderer::kScreenWidth + 2 * render_opt.extra, bt::Renderer::kScreenHeight);
             const bt::Scene scene = game->display();
             const int extra = render_opt.extra;
+            scene_renderer->analyse(scene, extra);
+            if (settings.effects &&
+                lighting->prepare(Lighting::Input{scene_renderer->emission(), scene_renderer->ui_mask(), scene_renderer->play_x(),
+                                                  scene_renderer->play_w(), scene_renderer->view_x(), scene_renderer->view_y()},
+                                  game->level_id(), out.width, out.height, 1, static_cast<double>(SDL_GetTicks()) / 1000.0))
+                display->effect = lighting->state(), display->sparks = &lighting->sparks();
             display->scene_draw = [&renderer_ref = *scene_renderer, scene, extra](const SDL_FRect& d) { renderer_ref.draw(scene, d, extra); };
             return display->filter;
         }
@@ -1066,6 +1101,7 @@ int main(int argc, char** argv) {
             if (keys_from >= 0 && k >= 0 && k < static_cast<int>(keys.size())) game->type_key(keys[static_cast<std::size_t>(k)]);
             try {
                 game->tick();
+                if (scene_renderer) scene_renderer->tick(game->display(), render_opt.extra);
             } catch (const std::exception& ex) {
                 std::fprintf(stderr, "engine error at tick %d: %s\n", t, ex.what());
                 return 2;
@@ -1183,6 +1219,7 @@ int main(int argc, char** argv) {
             game->set_input(static_cast<std::uint16_t>(read_controls(settings.bindings) | read_gamepad(pad)));
             try {
                 game->tick();
+                if (scene_renderer) scene_renderer->tick(game->display(), render_opt.extra);
             } catch (const std::exception& ex) {
                 fail(std::string("The engine stopped: ") + ex.what());
                 running = false;
@@ -1191,6 +1228,8 @@ int main(int argc, char** argv) {
             if (!handle_events()) running = false;
         }
         if (acc > frame_seconds(*game) * 5) acc = 0;  // don't spiral after a stall
+        // Smooth motion: how far into the next game frame we are.
+        if (scene_renderer) scene_renderer->interp = static_cast<float>(std::clamp(acc / frame_seconds(*game), 0.0, 1.0));
 
         const Filter keep = draw(frame);
         display->present(frame);
