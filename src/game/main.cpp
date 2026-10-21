@@ -747,7 +747,7 @@ int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
     int wide_arg = -1, filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
     std::string shot, input_spec, keys_spec, pack_arg, frame_png, parts_dir;
-    bool godmode = false, coverage = false, no_gpu = false;
+    bool godmode = false, coverage = false, no_gpu = false, mute = false;
     int effects_arg = -1;
     std::string enumerate_dir, metatiles_dir;
     for (int i = 1; i < argc; ++i) {
@@ -766,6 +766,7 @@ int main(int argc, char** argv) {
         else if (a == "--godmode") godmode = true;
         else if (a == "--coverage") coverage = true;
         else if (a == "--no-gpu") no_gpu = true;
+        else if (a == "--mute") mute = true;
         else if (a == "--effects") effects_arg = std::atoi(next), ++i;
         else if (a == "--enumerate") enumerate_dir = next, ++i;
         else if (a == "--metatiles") metatiles_dir = next, ++i;
@@ -824,8 +825,11 @@ int main(int argc, char** argv) {
     if (!sdl) return 1;
     SDL_SetRenderVSync(sdl, 1);
     Settings settings = load_settings(settings_path);
-    audio.open();  // the game runs silently if there is no audio device
-    if (music.open(find_soundfont(settings, settings_path.parent_path()))) audio.music = &music;
+    // Headless runs (--shot) and --mute stay silent: no audio device at all.
+    if (!mute && shot.empty()) {
+        audio.open();  // the game runs silently if there is no audio device
+        if (music.open(find_soundfont(settings, settings_path.parent_path()))) audio.music = &music;
+    }
     auto display = std::make_unique<Display>(sdl);
     if (filter_arg >= 0 && filter_arg < static_cast<int>(Filter::Count)) settings.filter = static_cast<Filter>(filter_arg);
     if (wide_arg >= 0) settings.wide = wide_arg != 0;
