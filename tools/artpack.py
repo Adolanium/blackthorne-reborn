@@ -570,6 +570,7 @@ def cmd_stitch_poses(args):
                     continue
                 if p["mirror"]:
                     cell = cell[:, ::-1]
+                cell = defringe(cell.copy(), passes=s)  # wherever the outline reaches past the painted figure
                 part_png = os.path.join(args.export, "sprites", p["key"] + ".png")
                 if not os.path.exists(part_png):
                     continue
