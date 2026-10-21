@@ -208,6 +208,36 @@ python tools/artpack.py stitch-hud out/export out/work packs/<name>
 `out/style/` holds `fg.png`, `bg.png` and `sprites.png`: repainted examples
 that define the style.
 
+## Next: the GPU renderer, lighting and effects
+
+The paintings give the detail; light and atmosphere are next. The plan,
+without vendor-specific upscalers (the art is already at 4x):
+
+1. **Composite on the GPU.** Move `HdRenderer`'s composition to SDL3's GPU
+   API (Vulkan, Direct3D 12 or Metal): painted layers and sprites as
+   textured quads in the original's order, with the HUD and text as a
+   separate overlay. The first milestone is output identical to the CPU
+   `HdRenderer`, which stays as the reference. This also removes the CPU
+   cost of drawing at 4x, so higher resolutions become cheap.
+2. **Scene data for effects.** Alongside colour, render a depth value per
+   layer, masks (map, sprites, text and HUD) and motion vectors (camera
+   and sprite movement between displayed frames). `Game::display()` can
+   show the same page for several ticks during fades and waits, so
+   anything that works across frames follows the displayed frames, not the
+   ticks.
+3. **Lighting.** Light sources come from the game itself: palette-cycled
+   fire, torches and lava (the cycle ranges say which pixels they are),
+   muzzle flashes and explosions (sprite effects), glowing items. Each
+   gives a dynamic light that flickers with the cycling colours. Normal
+   and depth maps generated for the paintings let light wrap around rocks
+   and ledges.
+4. **Atmosphere and particles.** Bloom on bright things, light shafts,
+   fog layers with parallax, embers rising from fires, sparks and dust on
+   impacts, and a colour grade per level.
+
+Gameplay never changes. Every effect is a renderer option, and the classic
+and CPU HD paths stay available.
+
 ## Checking nothing broke
 
 - Gameplay: `tools/emu/check.py` must still report 0 of 21 levels diverged.
