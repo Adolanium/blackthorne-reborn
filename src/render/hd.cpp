@@ -29,6 +29,17 @@ std::uint32_t over(std::uint32_t dst, std::uint32_t src) {
     return 0xFF000000u | mix(16) | mix(8) | mix(0);
 }
 
+// How bright palette entry v is shown against how it was painted (for
+// cycled colours, which move between entries rather than fade).
+float cycle_gain(const std::uint8_t* shown, const std::uint8_t* painted, int v) {
+    auto lum = [&](const std::uint8_t* pal) {
+        return 0.30f * static_cast<float>(pal[v * 3] & 0x3F) + 0.59f * static_cast<float>(pal[v * 3 + 1] & 0x3F) +
+               0.11f * static_cast<float>(pal[v * 3 + 2] & 0x3F);
+    };
+    const float b = lum(painted), s = lum(shown);
+    return b < 2.0f ? 1.0f : std::clamp(s / b, 0.4f, 2.0f);
+}
+
 std::uint32_t scale_rgb(std::uint32_t p, const float f[3]) {
     auto ch = [&](int shift, float k) {
         const int v = static_cast<int>(((p >> shift) & 0xFF) * k + 0.5f);
@@ -76,6 +87,22 @@ const Image* ArtPack::cell(int level, int metatile) const {
         const std::filesystem::path path = dir_ / "cells" / name;
         if (!std::filesystem::exists(path, ec) || !read_png(path, *img) || img->width != 16 * scale_ || img->height != 16 * scale_) img.reset();
         it = cells_.emplace(key, std::move(img)).first;
+    }
+    return it->second.get();
+}
+
+const Image* ArtPack::anim_cell(int level, std::uint64_t key) const {
+    if (!has_cells_) return nullptr;
+    const auto k = std::make_pair(level, key);
+    auto it = anim_cells_.find(k);
+    if (it == anim_cells_.end()) {
+        char name[48];
+        std::snprintf(name, sizeof name, "%X_k%016llx.png", level, static_cast<unsigned long long>(key));
+        auto img = std::make_unique<Image>();
+        std::error_code ec;
+        const std::filesystem::path path = dir_ / "cells" / name;
+        if (!std::filesystem::exists(path, ec) || !read_png(path, *img) || img->width != 16 * scale_ || img->height != 16 * scale_) img.reset();
+        it = anim_cells_.emplace(k, std::move(img)).first;
     }
     return it->second.get();
 }
@@ -162,6 +189,8 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
     // the playfield come from it, upscaled.
     RenderOptions flat = opt;
     flat.no_shake = true;
+    cov_ = {};
+    anim_keys_.clear();
     Image& classic = classic_;
     base_.render_screen(scene, classic, flat);
     Renderer::Layers& layers = layers_;
@@ -316,17 +345,25 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                 const bool original = state != 0;
                 const int idx = Renderer::layer_index(own.pixels[i1]);
                 const int front_idx = Renderer::layer_index(front_1x.pixels[i1]);
-                // A map cell the game changed: its painted metatile, if the pack has one.
-                if (state == 2 && pack_) {
+                // A map cell the game changed (2) or that shows animated tiles
+                // (1): its painted metatile or animation state, if the pack has one.
+                if (state != 0 && pack_ && (ox + x) >= 0 && (oy + y) >= 0) {
                     const int mx = (ox + x) >> 4, my = (oy + y) >> 4;
                     const std::uint16_t lbase = ds.u16(background ? 0x25B2 : 0x25B0);
                     const int row = background ? ds.u16(0x1CA0) : ds.u16(Machine::kMapRowBytes);
                     const int mtv = m.map_u16(static_cast<std::uint16_t>(lbase + my * row + mx * 2)) & 0x3FF;
-                    const Image* cellp = pack_->cell(level, mtv);
+                    const Image* cellp = nullptr;
+                    if (state == 2) cellp = pack_->cell(level, mtv);
+                    if (!cellp && Renderer::metatile_animated(scene, mtv)) {
+                        auto k = anim_keys_.find(mtv);
+                        if (k == anim_keys_.end()) k = anim_keys_.emplace(mtv, Renderer::metatile_key(scene, mtv)).first;
+                        cellp = pack_->anim_cell(level, k->second);
+                    }
                     const int ci = merged && front_idx >= 0 ? front_idx : idx;
                     if (cellp && !(ci >= 0 && unfollowable[static_cast<std::size_t>(ci)])) {
                         const bool owner_front = front_idx >= 0 && !merged;
                         if (owner_front != front || ci < 0) continue;
+                        ++cov_.painted;
                         const float* f = tint[static_cast<std::size_t>(ci)].data();
                         const bool plain = identity[static_cast<std::size_t>(ci)];
                         const int lx = (ox + x) & 15, ly = (oy + y) & 15;
@@ -347,6 +384,7 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                     (merged && front_idx >= 0 && unfollowable[static_cast<std::size_t>(front_idx)])) {
                     original_pixel(x, y, idx, own4);
                     if (merged) original_pixel(x, y, front_idx, front4);
+                    if (idx >= 0 || (merged && front_idx >= 0)) ++cov_.original, ++cov_.original_map;
                     continue;
                 }
                 // The painting decides the shape; the original decides whether
@@ -354,6 +392,7 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                 const bool owner_front = front_idx >= 0 && !merged;
                 if (owner_front != front) continue;
                 const int tint_idx = merged && front_idx >= 0 ? front_idx : idx;
+                if (tint_idx >= 0) ++cov_.painted;
                 const float* f = tint_idx >= 0 ? tint[static_cast<std::size_t>(tint_idx)].data() : factor;
                 const bool plain = tint_idx >= 0 ? identity[static_cast<std::size_t>(tint_idx)] : factor_identity;
                 if (smooth && tint_idx >= 0 && animated[static_cast<std::size_t>(tint_idx)]) {
@@ -447,8 +486,13 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                     // The replacement follows the colour change of its pixel
                     // since it was painted (fades, tints, other palettes).
                     float f[3] = {1, 1, 1};
-                    bool plain = true, follow = rep != nullptr && !animated[static_cast<std::size_t>(v)];
-                    if (follow) {
+                    const bool cyc = animated[static_cast<std::size_t>(v)];
+                    bool plain = true, follow = rep != nullptr && (!cyc || smooth);
+                    if (follow && cyc) {  // brightness from the cycling colour
+                        const float g = cycle_gain(scene.palette, rep->palette.data(), v);
+                        f[0] = f[1] = f[2] = g;
+                        plain = false;
+                    } else if (follow) {
                         const std::uint32_t shown = pal_colour(scene.palette, v), painted = pal_colour(rep->palette.data(), v);
                         for (int k = 0; k < 3; ++k) {
                             const int s = static_cast<int>((shown >> (16 - 8 * k)) & 0xFF), b = static_cast<int>((painted >> (16 - 8 * k)) & 0xFF);
@@ -459,8 +503,10 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                     }
                     if (!follow) {
                         original_part_pixel(x, y, sx, sy, v);
+                        ++cov_.original, ++cov_.original_sprites;
                         continue;
                     }
+                    ++cov_.painted;
                     // The replacement is drawn the way the part's data is stored:
                     // mirrored parts read it from the other side.
                     const int rx = (part.mirror ? size - 1 - x : x) * S;
@@ -507,6 +553,8 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
     };
     text1_ = layers.text;
     text_only_unpainted(text1_);
+    for (std::uint32_t p : text1_.pixels)
+        if (p >> 24) ++cov_.original, ++cov_.original_text;
     if (pack_ && pack_->smooth_text() && S == 4 && opt.text) {
         // Text rounded off: Scale2x twice, drawn over the playfield.
         scale2x(text1_, text2_);
@@ -569,10 +617,16 @@ void HdRenderer::draw_hud(const Scene& scene, const Image& classic, const std::a
     };
     // Screen pixel (x, y) shows palette entry v; `rep` is the replacement it
     // comes from, at (rx, ry) in game pixels.
+    const bool smooth = pack_->smooth_fallback() && S == 4;
     auto put = [&](int x, int y, int v, const Image* rep, int rx, int ry) {
         float f[3] = {1, 1, 1};
-        bool plain = true, follow = rep != nullptr && !cycled[static_cast<std::size_t>(v)];
-        if (follow) {
+        const bool cyc = cycled[static_cast<std::size_t>(v)];
+        bool plain = true, follow = rep != nullptr && (!cyc || smooth);
+        if (follow && cyc) {
+            const float g = cycle_gain(scene.palette, painted_pal.data(), v);
+            f[0] = f[1] = f[2] = g;
+            plain = false;
+        } else if (follow) {
             const std::uint32_t shown = pal_colour(scene.palette, v), painted = pal_colour(painted_pal.data(), v);
             for (int k = 0; k < 3; ++k) {
                 const int s = static_cast<int>((shown >> (16 - 8 * k)) & 0xFF), b = static_cast<int>((painted >> (16 - 8 * k)) & 0xFF);
@@ -583,8 +637,10 @@ void HdRenderer::draw_hud(const Scene& scene, const Image& classic, const std::a
         }
         if (!follow) {
             block(x, y, pal_colour(scene.palette, v));
+            ++cov_.original, ++cov_.original_hud;
             return;
         }
+        ++cov_.painted;
         for (int yy = 0; yy < S; ++yy) {
             const std::uint32_t* src = &rep->pixels[static_cast<std::size_t>(ry * S + yy) * rep->width + rx * S];
             std::uint32_t* dst = &page.pixels[static_cast<std::size_t>(y * S + yy) * page.width + x * S];
@@ -697,6 +753,7 @@ bool HdRenderer::draw_glyph(const Scene& scene, int font, int index, int x, int 
         for (int gx = 0; gx < 8; ++gx) {
             if (font == 1 && !g.set(gx, gy)) continue;  // captions: only where the mask is set
             const int v = g.pixels[static_cast<std::size_t>(gy * 8 + gx)];
+            ++cov_.painted;
             const std::uint32_t shown = pal_colour(scene.palette, v), painted = pal_colour(painted_pal.data(), v);
             float f[3] = {1, 1, 1};
             bool plain = true, follow = true;

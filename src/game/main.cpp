@@ -388,6 +388,16 @@ void save_metatiles(const bt::Scene& scene, std::size_t count, const std::filesy
     const bt::DataSegment& ds = m.ds;
     std::filesystem::create_directories(dir);
     std::vector<bool> used(count, false);
+    // Metatiles the game is known to swap in (<dir>/cells.tsv: level,
+    // metatile) are written even if the level's maps use them too: a cell
+    // painted alone looks different from the same metatile in the painting.
+    std::set<int> also;
+    {
+        std::ifstream in(dir / "cells.tsv");
+        std::string lv, mtx;
+        while (in >> lv >> mtx)
+            if (std::stoi(lv, nullptr, 16) == ds.u16(0x1CA4)) also.insert(std::stoi(mtx, nullptr, 16));
+    }
     auto scan = [&](std::uint16_t base, int row, int w, int h) {
         for (int y = 0; y < h; ++y)
             for (int x = 0; x < w; ++x) {
@@ -404,7 +414,7 @@ void save_metatiles(const bt::Scene& scene, std::size_t count, const std::filesy
     int written = 0;
     bt::Image back, front, img;
     for (std::size_t mt = 0; mt < count; ++mt) {
-        if (used[mt]) continue;
+        if (used[mt] && !also.count(static_cast<int>(mt))) continue;
         bt::Renderer::render_metatile(scene, static_cast<int>(mt), false, back);
         bt::Renderer::render_metatile(scene, static_cast<int>(mt), true, front);
         img.resize(16, 16);
@@ -450,6 +460,41 @@ void save_parts(const bt::Scene& scene, const std::filesystem::path& dir, int ti
         };
         scan(d.u16(0x25B0), d.u16(bt::Machine::kMapRowBytes), d.u16(bt::Machine::kMapWidth), d.u16(bt::Machine::kMapHeight));
         if (scene.has_background) scan(d.u16(0x25B2), d.u16(0x1CA0), d.u16(0x1D15), d.u16(0x1D17));
+        // Cells showing animated tiles: each state as cells/<ID>_k<key>.png
+        // (16x16, the level's palette at load).
+        static std::set<std::pair<int, std::uint64_t>> anim_seen;
+        auto anim = [&](std::uint16_t base, int row, int w, int h) {
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    const int v = m.map_u16(static_cast<std::uint16_t>(base + y * row + x * 2)) & 0x3FF;
+                    if (!bt::Renderer::metatile_animated(scene, v)) continue;
+                    const std::uint64_t key = bt::Renderer::metatile_key(scene, v);
+                    if (!anim_seen.insert({lvl, key}).second) continue;
+                    bt::Image back, front, img;
+                    bt::Renderer::render_metatile(scene, v, false, back);
+                    bt::Renderer::render_metatile(scene, v, true, front);
+                    img.resize(16, 16);
+                    bool any = false;
+                    for (std::size_t i = 0; i < img.pixels.size(); ++i) {
+                        const int fi = bt::Renderer::layer_index(front.pixels[i]), bi = bt::Renderer::layer_index(back.pixels[i]);
+                        const int c = fi >= 0 ? fi : bi;
+                        if (c < 0) {
+                            img.pixels[i] = 0u;
+                            continue;
+                        }
+                        any = true;
+                        auto ch = [&](int k) { return static_cast<std::uint32_t>((m.palette_at_load[static_cast<std::size_t>(c * 3 + k)] & 0x3F) * 255 / 63); };
+                        img.pixels[i] = 0xFF000000u | (ch(0) << 16) | (ch(1) << 8) | ch(2);
+                    }
+                    if (!any) continue;
+                    char name[48];
+                    std::snprintf(name, sizeof name, "%X_k%016llx.png", lvl, static_cast<unsigned long long>(key));
+                    std::filesystem::create_directories(dir / "cells");
+                    bt::write_png(dir / "cells" / name, img);
+                }
+        };
+        anim(d.u16(0x25B0), d.u16(bt::Machine::kMapRowBytes), d.u16(bt::Machine::kMapWidth), d.u16(bt::Machine::kMapHeight));
+        if (scene.has_background) anim(d.u16(0x25B2), d.u16(0x1CA0), d.u16(0x1D15), d.u16(0x1D17));
     }
     // Not while the screen is faded or fading: sprite colours that only the
     // shown palette has would be saved dark.
@@ -509,7 +554,7 @@ int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
     int wide_arg = -1, filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
     std::string shot, input_spec, keys_spec, pack_arg, frame_png, parts_dir;
-    bool godmode = false;
+    bool godmode = false, coverage = false;
     std::string enumerate_dir, metatiles_dir;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -525,6 +570,7 @@ int main(int argc, char** argv) {
         else if (a == "--frame") frame_png = next, ++i;
         else if (a == "--parts") parts_dir = next, ++i;
         else if (a == "--godmode") godmode = true;
+        else if (a == "--coverage") coverage = true;
         else if (a == "--enumerate") enumerate_dir = next, ++i;
         else if (a == "--metatiles") metatiles_dir = next, ++i;
         else if (a == "--size") {
@@ -671,6 +717,10 @@ int main(int argc, char** argv) {
             if (!keep_running) break;
         }
         if (!frame_png.empty()) bt::write_png(frame_png, frame);  // the frame before display scaling
+        if (coverage && pack && settings.hd)  // where the last frame's pixels came from
+            std::printf("coverage: %ld painted, %ld original (map %ld, sprites %ld, text %ld, hud %ld)\n", hd.coverage().painted,
+                        hd.coverage().original, hd.coverage().original_map, hd.coverage().original_sprites, hd.coverage().original_text,
+                        hd.coverage().original_hud);
         SDL_Surface* pixels = SDL_RenderReadPixels(sdl, nullptr);
         const bool ok = pixels && SDL_SaveBMP(pixels, shot.c_str());
         SDL_DestroySurface(pixels);

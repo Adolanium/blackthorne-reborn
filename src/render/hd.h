@@ -34,6 +34,8 @@ namespace bt {
 //   <pack>/cells/<ID>_<mmm>.png      metatile mmm (hex) of level ID painted
 //                                    alone (scale times 16x16), drawn where
 //                                    the game changed a map cell to it
+//   <pack>/cells/<ID>_k<key>.png     a cell showing animated tiles, by
+//                                    Renderer::metatile_key (16 hex digits)
 // Missing files (or files of the wrong size) fall back to the original art.
 class ArtPack {
 public:
@@ -58,8 +60,10 @@ public:
     // pixels, or nullptr; hud_palette() is what it was painted against.
     const Image* hud(const std::string& name, int width, int height) const;
     bool has_hud() const { return has_hud_; }
-    // A painted metatile of a level, or nullptr.
+    // A painted metatile of a level, or nullptr; anim_cell: a painted state
+    // of an animated cell, by Renderer::metatile_key.
     const Image* cell(int level, int metatile) const;
+    const Image* anim_cell(int level, std::uint64_t key) const;
     // A painted glyph of font 0 or 1, or nullptr.
     const Image* glyph(int font, int index) const;
     bool has_font() const { return has_font_; }
@@ -76,6 +80,7 @@ private:
     bool has_sprites_ = false;
     bool has_hud_ = false, has_font_ = false, has_cells_ = false;
     mutable std::map<int, std::unique_ptr<Image>> cells_;  // level * 1024 + metatile; nullptr = not in the pack
+    mutable std::map<std::pair<int, std::uint64_t>, std::unique_ptr<Image>> anim_cells_;
     std::array<std::uint8_t, 768> font_palette_{};
     mutable std::map<int, std::unique_ptr<Image>> glyphs_;  // font * 4096 + index; nullptr = not in the pack
     std::array<std::uint8_t, 768> hud_palette_{};
@@ -92,6 +97,14 @@ public:
     int scale() const { return scale_; }
     void render_screen(const Scene& scene, Image& out, const RenderOptions& opt = {}) const;
 
+    // Where the last frame's game pixels came from: the pack's paintings or
+    // the original art (map, sprites, text, HUD; empty screen not counted).
+    struct Coverage {
+        long painted = 0, original = 0;
+        long original_map = 0, original_sprites = 0, original_text = 0, original_hud = 0;  // original, by kind
+    };
+    const Coverage& coverage() const { return cov_; }
+
 private:
     void draw_hud(const Scene& scene, const Image& classic, const std::array<bool, 256>& cycled, Image& page) const;
     // A painted glyph at (x, y) in game pixels of `out` (the playfield or the
@@ -106,6 +119,8 @@ private:
     mutable Renderer::Layers layers_;
     mutable std::vector<std::uint8_t> cells_;
     mutable std::vector<Renderer::Part> parts_;
+    mutable Coverage cov_;
+    mutable std::map<int, std::uint64_t> anim_keys_;  // metatile -> key, this frame
 };
 
 }  // namespace bt

@@ -384,6 +384,36 @@ static const std::array<std::uint8_t, 768> kIndexPalette = [] {
 
 std::uint32_t Renderer::index_pixel(int index) { return colour(kIndexPalette.data(), index); }
 
+std::uint64_t Renderer::metatile_key(const Scene& scene, int metatile) {
+    std::uint64_t h = 1469598103934665603ull;  // FNV-1a
+    Image img;
+    for (bool front : {false, true}) {
+        render_metatile(scene, metatile, front, img);
+        for (std::uint32_t p : img.pixels) {
+            const int v = layer_index(p);
+            h = (h ^ static_cast<std::uint64_t>(v + 1)) * 1099511628211ull;
+        }
+        h = (h ^ 0xFFu) * 1099511628211ull;
+    }
+    return h;
+}
+
+bool Renderer::metatile_animated(const Scene& scene, int metatile) {
+    const Machine& m = *scene.machine;
+    const std::uint16_t mt = static_cast<std::uint16_t>(m.ds.u16(Machine::kMetatileTable) + (metatile & 0x3FF) * 8);
+    for (int k = 0; k < 4; ++k) {
+        const std::size_t t = static_cast<std::size_t>(TileRef{m.map_u16(static_cast<std::uint16_t>(mt + 2 * k))}.tile() & 0x3FF);
+        if (!std::equal(m.tiles.begin() + static_cast<std::ptrdiff_t>(t * 64), m.tiles.begin() + static_cast<std::ptrdiff_t>(t * 64 + 64),
+                        m.tiles_at_load.begin() + static_cast<std::ptrdiff_t>(t * 64)))
+            return true;
+        const std::size_t mi = (t * 8) & 0x1FFF;
+        if (!std::equal(m.tile_masks.begin() + static_cast<std::ptrdiff_t>(mi), m.tile_masks.begin() + static_cast<std::ptrdiff_t>(mi + 8),
+                        m.tile_masks_at_load.begin() + static_cast<std::ptrdiff_t>(mi)))
+            return true;
+    }
+    return false;
+}
+
 void Renderer::render_metatile(const Scene& scene, int metatile, bool front, Image& out) {
     const Machine& m = *scene.machine;
     out.resize(16, 16);

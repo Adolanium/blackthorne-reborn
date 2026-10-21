@@ -401,7 +401,16 @@ def cmd_split_cells(args):
     os.makedirs(os.path.join(base, "out"), exist_ok=True)
     pitch = 16 + GAP
     rows = (224 - GAP) // pitch
+    # Sheets made before stay (they may be painted already); new cells go
+    # on new sheets.
     sheets = []
+    manifest = os.path.join(base, "manifest.json")
+    if os.path.exists(manifest):
+        with open(manifest) as f:
+            sheets = json.load(f)["sheets"]
+    done = {c["name"] for sh in sheets for c in sh["cells"]}
+    names = [n for n in names if n not in done]
+    number = len(sheets)
     for first in range(0, len(names), CELL_COLS * rows):
         batch = names[first:first + CELL_COLS * rows]
         used = (len(batch) + CELL_COLS - 1) // CELL_COLS
@@ -413,12 +422,13 @@ def cmd_split_cells(args):
             c = Image.open(os.path.join(src, name)).convert("RGBA").resize((16 * SCALE, 16 * SCALE), Image.NEAREST)
             sheet.paste(c, (x * SCALE, y * SCALE), mask=c.getchannel("A"))
             cells.append({"name": name, "x": x, "y": y})
-        sname = f"c_{first // (CELL_COLS * rows)}.png"
+        sname = f"c_{number}.png"
+        number += 1
         sheet.save(os.path.join(base, "in", sname))
         sheets.append({"name": sname, "width": w, "height": h, "cells": cells})
     with open(os.path.join(base, "manifest.json"), "w") as f:
         json.dump({"scale": SCALE, "sheets": sheets}, f, indent=1)
-    print(f"cells: {len(names)} on {len(sheets)} sheets in {base}")
+    print(f"cells: {len(names)} new; {len(sheets)} sheets in {base}")
 
 
 def cmd_stitch_cells(args):
