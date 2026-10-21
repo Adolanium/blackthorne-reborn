@@ -701,6 +701,90 @@ void save_metatiles(const bt::Scene& scene, std::size_t count, const std::filesy
     std::printf("level %s: %zu metatiles, %d alternates, part sizes %d/%d\n", level, count, written, ds.u16(0x350), ds.u16(0x352));
 }
 
+// Kyle's poses: each frame, the parts of actor slot 0 (ds:198Ah first part,
+// ds:19B2h count) assembled as drawn, turned to face right, saved once per
+// distinct pose as <dir>/pose_<hash>.png (1x, the level's palette) with a line
+// in <dir>/poses.tsv (named by a hash of the pose): name, width, height,
+// then per part key,size,x,y,mirror
+// (mirror: the part's data is drawn flipped in this pose). For repainting
+// whole poses instead of loose parts (tools/artpack.py split-poses).
+void save_poses(const bt::Scene& scene, const std::filesystem::path& dir) {
+    const bt::Machine& m = *scene.machine;
+    const bt::DataSegment& ds = m.ds;
+    const int first = ds.u16(0x198A), count = ds.u16(0x19B2);
+    if (count <= 0 || count > 16 || first > 0xFE) return;
+    struct P {
+        bt::Renderer::Part part;
+        std::uint64_t key;
+    };
+    std::vector<P> ps;
+    for (int i = 0, p = first; i < count && p <= 0xFE; ++i, p += 2) {
+        const std::uint16_t attr = ds.field(0x452, p);
+        if (!(attr & 0x80)) continue;
+        bt::Renderer::Part part;
+        part.size = ds.field(0x952, p);
+        if (part.size != 16 && part.size != 32) continue;
+        part.data = m.sprite_data(ds.field(0x852, p), ds.field(0x752, p));
+        if (!part.data) continue;
+        part.x = static_cast<std::int16_t>(ds.field(0x552, p));
+        part.y = static_cast<std::int16_t>(ds.field(0x652, p));
+        part.mirror = (attr & 0x20) != 0;
+        part.base = static_cast<std::uint8_t>(ds.field(0xF52, p));
+        ps.push_back({part, bt::Renderer::part_key(part)});
+    }
+    if (ps.empty()) return;
+    int x0 = 1 << 20, y0 = 1 << 20, x1 = -(1 << 20), y1 = -(1 << 20);
+    for (const P& q : ps) {
+        x0 = std::min(x0, q.part.x), y0 = std::min(y0, q.part.y);
+        x1 = std::max(x1, q.part.x + q.part.size), y1 = std::max(y1, q.part.y + q.part.size);
+    }
+    const int w = x1 - x0, h = y1 - y0;
+    if (w > 96 || h > 96) return;
+    // Facing left (most parts mirrored): turn the pose around.
+    int mirrored = 0;
+    for (const P& q : ps) mirrored += q.part.mirror;
+    const bool flip = mirrored * 2 > static_cast<int>(ps.size());
+    std::string sig;
+    for (const P& q : ps) {
+        const int px = flip ? x1 - (q.part.x + q.part.size) : q.part.x - x0, py = q.part.y - y0;
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "%016llx,%d,%d,%d,%d;", static_cast<unsigned long long>(q.key), q.part.size, px, py, q.part.mirror != flip);
+        sig += buf;
+    }
+    std::uint64_t pose_hash = 1469598103934665603ull;  // the pose's name: a hash of its parts and layout
+    for (char c : sig) pose_hash = (pose_hash ^ static_cast<std::uint8_t>(c)) * 1099511628211ull;
+    char name[32];
+    std::snprintf(name, sizeof name, "pose_%016llx", static_cast<unsigned long long>(pose_hash));
+    std::error_code ec;
+    if (std::filesystem::exists(dir / (std::string(name) + ".png"), ec)) return;
+    std::array<std::uint8_t, 768> palette{};
+    for (int i = 0; i < 256; ++i) {
+        const std::uint8_t* level = ds.raw() + 0x4A12 + i * 3;
+        const std::uint8_t* from = (level[0] | level[1] | level[2]) & 0x3F ? level : scene.palette + i * 3;
+        std::copy_n(from, 3, palette.begin() + i * 3);
+    }
+    bt::Image img;
+    img.resize(w, h);
+    std::fill(img.pixels.begin(), img.pixels.end(), 0u);
+    // Drawn as the game does: later parts in the list under earlier ones.
+    for (auto it = ps.rbegin(); it != ps.rend(); ++it) {
+        const bt::Renderer::Part& part = it->part;
+        for (int y = 0; y < part.size; ++y)
+            for (int x = 0; x < part.size; ++x) {
+                const int v = bt::Renderer::part_pixel(part, x, y);
+                if (v < 0) continue;
+                int sx = part.x - x0 + x;
+                if (flip) sx = w - 1 - sx;
+                auto c = [&](int k) { return static_cast<std::uint32_t>((palette[static_cast<std::size_t>(v * 3 + k)] & 0x3F) * 255 / 63); };
+                img.pixels[static_cast<std::size_t>(part.y - y0 + y) * w + sx] = 0xFF000000u | (c(0) << 16) | (c(1) << 8) | c(2);
+            }
+    }
+    std::filesystem::create_directories(dir);
+    bt::write_png(dir / (std::string(name) + ".png"), img);
+    std::ofstream(dir / (std::string(name) + ".pal"), std::ios::binary).write(reinterpret_cast<const char*>(palette.data()), 768);
+    std::ofstream(dir / "poses.tsv", std::ios::app) << name << '\t' << w << '\t' << h << '\t' << sig << '\n';
+}
+
 void save_parts(const bt::Scene& scene, const std::filesystem::path& dir, int tick) {
     const bt::Machine& m = *scene.machine;
     {
@@ -819,7 +903,7 @@ int main(int argc, char** argv) {
     std::string shot, input_spec, keys_spec, pack_arg, frame_png, parts_dir;
     bool godmode = false, coverage = false, no_gpu = false, mute = false;
     int effects_arg = -1;
-    std::string enumerate_dir, metatiles_dir;
+    std::string enumerate_dir, metatiles_dir, poses_dir;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         const char* next = i + 1 < argc ? argv[i + 1] : "";
@@ -840,6 +924,7 @@ int main(int argc, char** argv) {
         else if (a == "--effects") effects_arg = std::atoi(next), ++i;
         else if (a == "--enumerate") enumerate_dir = next, ++i;
         else if (a == "--metatiles") metatiles_dir = next, ++i;
+        else if (a == "--poses") poses_dir = next, ++i;
         else if (a == "--size") {
             char* end = nullptr;
             width = static_cast<int>(std::strtol(next, &end, 10));
@@ -991,6 +1076,7 @@ int main(int argc, char** argv) {
             }
             const bool keep_running = handle_events();
             if (!parts_dir.empty()) save_parts(game->display(), parts_dir, t);
+            if (!poses_dir.empty()) save_poses(game->display(), poses_dir);
             if (!enumerate_dir.empty() && t == ticks_arg) enumerate_parts(game->display(), enumerate_dir);
             if (!metatiles_dir.empty() && t == ticks_arg) {
                 const std::size_t count = archive->resource(game->machine().ds.u16(0x1CEE + 0x25)).size() / 8;

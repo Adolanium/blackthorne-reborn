@@ -140,6 +140,7 @@ private:
     mutable Image emission_, ui_;
     mutable int play_x_ = 0, play_w_ = 0;
     mutable std::map<int, std::uint64_t> anim_keys_;  // metatile -> key, this frame
+    mutable std::map<int, std::array<bool, 256>> anim_masks_;  // metatile -> pixels its animation changed
     // Where each metatile first appears in each layer at load (for cells
     // changed to a metatile the painting already shows elsewhere).
     mutable int where_level_ = -1;

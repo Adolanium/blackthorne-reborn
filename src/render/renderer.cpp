@@ -414,7 +414,20 @@ bool Renderer::metatile_animated(const Scene& scene, int metatile) {
     return false;
 }
 
+namespace {
+void render_metatile_from(const Scene& scene, int metatile, bool front, const std::uint8_t* tiles, const std::uint8_t* tile_masks, Image& out);
+}
+
 void Renderer::render_metatile(const Scene& scene, int metatile, bool front, Image& out) {
+    render_metatile_from(scene, metatile, front, scene.machine->tiles.data(), scene.machine->tile_masks.data(), out);
+}
+
+void Renderer::render_metatile_at_load(const Scene& scene, int metatile, bool front, Image& out) {
+    render_metatile_from(scene, metatile, front, scene.machine->tiles_at_load.data(), scene.machine->tile_masks_at_load.data(), out);
+}
+
+namespace {
+void render_metatile_from(const Scene& scene, int metatile, bool front, const std::uint8_t* tiles, const std::uint8_t* tile_masks, Image& out) {
     const Machine& m = *scene.machine;
     out.resize(16, 16);
     std::fill(out.pixels.begin(), out.pixels.end(), 0u);
@@ -423,18 +436,19 @@ void Renderer::render_metatile(const Scene& scene, int metatile, bool front, Ima
         const TileRef ref{m.map_u16(static_cast<std::uint16_t>(mt + 2 * k))};
         if (((ref.raw & 8) != 0) != front) continue;
         const std::size_t tile = static_cast<std::size_t>(ref.tile());
-        const std::uint8_t* px = m.tiles.data() + tile * 64;
-        const std::uint8_t* mask = m.tile_masks.data() + ((tile * 8) & 0x1FFF);
+        const std::uint8_t* px = tiles + tile * 64;
+        const std::uint8_t* mask = tile_masks + ((tile * 8) & 0x1FFF);
         for (int y = 0; y < 8; ++y)
             for (int x = 0; x < 8; ++x) {
                 const int ty = ref.flip_y() ? 7 - y : y, tx = ref.flip_x() ? 7 - x : x;
                 const int plane = tx & 3, col = tx >> 2;
                 if (!(mask[plane * 2 + (ty >> 2)] & (0x80 >> ((ty & 3) * 2 + col)))) continue;
                 const int v = px[plane * 16 + ty * 2 + col];
-                out.pixels[static_cast<std::size_t>((k >> 1) * 8 + y) * 16 + (k & 1) * 8 + x] = index_pixel(v >= 16 ? v : v + ref.palette_row() * 16);
+                out.pixels[static_cast<std::size_t>((k >> 1) * 8 + y) * 16 + (k & 1) * 8 + x] = Renderer::index_pixel(v >= 16 ? v : v + ref.palette_row() * 16);
             }
     }
 }
+}  // namespace
 
 int Renderer::layer_index(std::uint32_t pixel) {
     if (!(pixel >> 24)) return -1;

@@ -159,6 +159,49 @@ def blur(a, radius):
     return a
 
 
+def show_wall(out, original, level_dir, reach=0, tolerance=140.0):
+    """Fires on the wall (braziers, torches): their foreground cells carry
+    their own copy of the wall around them, close to the background's
+    colours. In pixel art that blends in; repainted, the two walls differ
+    and the cell shows as a square. Around fire (cells with flame pixels
+    and their neighbours), foreground pixels close to the background's
+    colour fade out by how close they are, and the background painting
+    shows. Same-scroll layers only."""
+    try:
+        with open(os.path.join(level_dir, "level.json")) as f:
+            info = json.load(f)
+    except OSError:
+        return
+    bg_path = os.path.join(level_dir, "bg.png")
+    if not info.get("background") or info.get("parallax") != [256, 256] or not os.path.exists(bg_path):
+        return
+    bg = Image.open(bg_path).convert("RGBA")
+    if bg.size != original.size:
+        return
+    f = np.asarray(original, dtype=np.float64)
+    b = np.asarray(bg, dtype=np.float64)
+    h1, w1 = f.shape[:2]
+    # Flame colours: orange to yellow (red cloth and blood have little green).
+    warm = (f[:, :, 0] > 170) & (f[:, :, 1] > 80) & (f[:, :, 2] < 90) & (f[:, :, 3] > 0)
+    cells = np.zeros(((h1 + 15) // 16, (w1 + 15) // 16), dtype=bool)
+    ys, xs = np.nonzero(warm)
+    cells[ys // 16, xs // 16] = True
+    if not cells.any():
+        return
+    grown = cells.copy()
+    for dy in range(-reach, reach + 1):
+        for dx in range(-reach, reach + 1):
+            grown |= np.roll(np.roll(cells, dy, 0), dx, 1)
+    area = np.kron(grown, np.ones((16, 16), dtype=bool))[:h1, :w1]
+    dist = np.abs(f[:, :, :3] - b[:, :, :3]).sum(axis=2)
+    w = np.clip(1.0 - dist / tolerance, 0.0, 1.0) * area * (f[:, :, 3] > 0) * (b[:, :, 3] > 0) * ~warm
+    if not w.any():
+        return
+    S = out.shape[0] // h1
+    m = np.asarray(Image.fromarray(np.rint(w * 255).astype(np.uint8)).resize((w1 * S, h1 * S), Image.BILINEAR), dtype=np.float64) / 255.0
+    out[:, :, 3] *= 1.0 - m
+
+
 def fill_gaps(out, original, reach=24):
     """Empty foreground pixels enclosed by foreground on all four sides
     within `reach` game pixels (gaps between dark interior tiles) are filled
@@ -320,6 +363,8 @@ def cmd_stitch(args):
                 out[weight > 0, 3] = alpha[weight > 0]
             painted = (weight > 0) & (out[:, :, 3] > 0)
             out[painted, :3] = colour[painted] / weight[painted][:, None]
+            if layer == "fg" and getattr(args, "show_wall", True):
+                show_wall(out, original, os.path.join(args.export, "levels", level))
             if layer == "fg" and getattr(args, "fill_gaps", False):
                 fill_gaps(out, original)
             if getattr(args, "match_light", True):
@@ -741,6 +786,8 @@ def main():
     s.add_argument("--levels", help="only these level ids (comma separated)")
     s.add_argument("--fill-gaps", action="store_true",
                    help="fill enclosed gaps in the foreground from the painting around them")
+    s.add_argument("--no-show-wall", dest="show_wall", action="store_false",
+                   help="keep foreground cells that repeat the wall behind them opaque")
     s.set_defaults(func=cmd_stitch)
     s = sub.add_parser("nearest")
     s.add_argument("export")

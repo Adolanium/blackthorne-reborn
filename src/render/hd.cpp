@@ -214,6 +214,7 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
     flat.no_shake = true;
     cov_ = {};
     anim_keys_.clear();
+    anim_masks_.clear();
     Image& classic = classic_;
     base_.render_screen(scene, classic, flat);
     Renderer::Layers& layers = layers_;
@@ -450,10 +451,28 @@ void HdRenderer::render_screen(const Scene& scene, Image& out, const RenderOptio
                             borrow_y = w->second.second;
                         }
                     }
+                    bool anim_pixel = true;
                     if (!cellp && Renderer::metatile_animated(scene, mtv)) {
                         auto k = anim_keys_.find(mtv);
                         if (k == anim_keys_.end()) k = anim_keys_.emplace(mtv, Renderer::metatile_key(scene, mtv)).first;
                         cellp = pack_->anim_cell(level, k->second);
+                        // Only the pixels the animation changed come from the state's
+                        // painting; the rest stay the level's painting, so the cell
+                        // doesn't show as a square.
+                        auto mk = anim_masks_.find(mtv);
+                        if (mk == anim_masks_.end()) {
+                            std::array<bool, 256> changed_px{};
+                            Image now, then;
+                            for (bool fr : {false, true}) {
+                                Renderer::render_metatile(scene, mtv, fr, now);
+                                Renderer::render_metatile_at_load(scene, mtv, fr, then);
+                                for (std::size_t i = 0; i < 256; ++i)
+                                    if (now.pixels[i] != then.pixels[i]) changed_px[i] = true;
+                            }
+                            mk = anim_masks_.emplace(mtv, changed_px).first;
+                        }
+                        anim_pixel = mk->second[static_cast<std::size_t>(((oy + y) & 15) * 16 + ((ox + x) & 15))];
+                        if (!anim_pixel && state == 1) cellp = nullptr;  // the level painting below
                     }
                     const int ci = merged && front_idx >= 0 ? front_idx : idx;
                     if (borrow_x >= 0 && ci >= 0) {  // the painting of the same metatile elsewhere

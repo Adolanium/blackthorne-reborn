@@ -129,6 +129,8 @@ public:
     // pixel is set; `front` gets the bit-3 ("in front") tiles only, else the
     // others.
     static void render_metatile(const Scene& scene, int metatile, bool front, Image& out);
+    // The same with the level's tiles as they loaded (before tile animations).
+    static void render_metatile_at_load(const Scene& scene, int metatile, bool front, Image& out);
     // A key for what a metatile shows now (both passes, with the current,
     // possibly animated, tiles): cells/<ID>_k<key>.png in art packs.
     static std::uint64_t metatile_key(const Scene& scene, int metatile);
