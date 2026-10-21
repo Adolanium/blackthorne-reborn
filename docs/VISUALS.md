@@ -208,6 +208,31 @@ python tools/artpack.py stitch-hud out/export out/work packs/<name>
 `out/style/` holds `fg.png`, `bg.png` and `sprites.png`: repainted examples
 that define the style.
 
+## The scene renderer
+
+`src/game/scene.{h,cpp}` draws the game as a scene of whole painted images
+on the GPU, not by rebuilding the original's pixels:
+
+- **Levels**: the background and foreground paintings drawn whole, with
+  their own soft edges; an "in front" layer (the foreground painting where
+  the original draws tiles in front of characters, with a soft edge) after
+  the characters.
+- **Characters**: whole painted poses (`<pack>/poses/`, from
+  `artpack.py export-poses`), matched each frame by the same signature
+  `blackthorne --poses` writes, placed from the game's part positions and
+  flipped when facing left; their outlines are the painting's own. Parts
+  not covered by a pose are drawn as painted parts.
+- **Changed cells** (doors, bridges): painted metatiles copied into the
+  level texture where the game changes the map.
+- **Text and HUD**: painted glyphs and panels.
+- Everything is drawn at the window's resolution with smooth scaling; fades
+  are a colour modulation of everything.
+
+It is used when the pack has `poses/`; `--legacy-hd` keeps the pixel-based
+HD renderer. Still to come: whole poses for the other characters, the
+lighting pass on the scene, animated water and fire, and smooth motion
+between game frames.
+
 ## Lighting and atmosphere
 
 On Windows the game draws through SDL's GPU renderer (Direct3D 12) and runs a

@@ -541,6 +541,41 @@ def cmd_split_poses(args):
     print(f"{len(rows)} poses on {len(sheets)} sheets in {base}")
 
 
+def cmd_export_poses(args):
+    """Whole painted poses for the scene renderer: each pose's full sheet
+    cell (64x64 game pixels at 4x) with the painting's own soft outline
+    (everything the model didn't leave magenta), so hair and limbs may
+    reach past the original silhouette. Writes <pack>/poses/<name>.png and
+    <pack>/poses/poses.json: name -> [ox, oy, w, h], the pose box's place
+    in the cell (game pixels)."""
+    base = os.path.join(args.work, "poses")
+    with open(os.path.join(base, "manifest.json")) as f:
+        m = json.load(f)
+    out = os.path.join(args.pack, "poses")
+    os.makedirs(out, exist_ok=True)
+    index = {}
+    for sheet in m["sheets"]:
+        path = os.path.join(base, "out", sheet["name"])
+        if not os.path.exists(path):
+            continue
+        raw = np.asarray(Image.open(path).convert("RGB").resize((sheet["width"] * SCALE, sheet["height"] * SCALE), Image.LANCZOS),
+                         dtype=np.float64)
+        alpha = key_alpha(raw)
+        rgb = defringe(raw.copy(), passes=24)
+        s = POSE_CELL * SCALE
+        for i, c in enumerate(sheet["cells"]):
+            # The cell is found from the pose's place: cells are POSE_CELL apart.
+            cx0, cy0 = (c["x"] // POSE_CELL) * POSE_CELL, (c["y"] // POSE_CELL) * POSE_CELL
+            y0, x0 = cy0 * SCALE, cx0 * SCALE
+            a = alpha[y0:y0 + s, x0:x0 + s]
+            img = np.dstack([np.rint(rgb[y0:y0 + s, x0:x0 + s]).clip(0, 255), np.rint(a * 255)]).astype(np.uint8)
+            Image.fromarray(img, "RGBA").save(os.path.join(out, c["pose"] + ".png"))
+            index[c["pose"]] = [c["x"] - cx0, c["y"] - cy0, c["w"], c["h"]]
+    with open(os.path.join(out, "poses.json"), "w") as f:
+        json.dump({"cell": POSE_CELL, "scale": SCALE, "poses": index}, f)
+    print(f"poses: {len(index)} whole figures in {out}")
+
+
 def cmd_stitch_poses(args):
     """Cuts the repainted poses back into Kyle's parts: each part's region
     of its pose, turned back to how its data is stored, inside the part's
@@ -904,6 +939,10 @@ def main():
     s.add_argument("poses", help="the folder blackthorne --poses wrote")
     s.add_argument("work")
     s.set_defaults(func=cmd_split_poses)
+    s = sub.add_parser("export-poses")
+    s.add_argument("work")
+    s.add_argument("pack")
+    s.set_defaults(func=cmd_export_poses)
     s = sub.add_parser("stitch-poses")
     s.add_argument("poses")
     s.add_argument("export")

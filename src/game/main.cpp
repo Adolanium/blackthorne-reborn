@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <set>
 #include <cctype>
 #include <cmath>
@@ -21,6 +22,7 @@
 #include "data/archive.h"
 #include "engine/game.h"
 #include "render/filters.h"
+#include "game/scene.h"
 #include "render/effects.h"
 #include "render/hd.h"
 #include "render/png.h"
@@ -232,9 +234,25 @@ public:
     }
     Filter filter = Filter::Sharp;
     SDL_GPURenderState* effect = nullptr;  // a lighting pass for the final draw (set per frame)
+    // When set, the picture is drawn by this (the scene renderer) into the
+    // screen's rect instead of from the frame image; the frame's size is
+    // the screen's in game pixels.
+    std::function<void(const SDL_FRect&)> scene_draw;
     const std::vector<Lighting::Spark>* sparks = nullptr;  // embers drawn over it (frame pixels)
 
     void present(const bt::Image& frame, bool flip = true) {
+        if (scene_draw) {
+            int ww = 0, wh = 0;
+            SDL_GetCurrentRenderOutputSize(sdl_, &ww, &wh);
+            const float s = std::min(static_cast<float>(ww) / frame.width, static_cast<float>(wh) / frame.height);
+            const SDL_FRect dst{std::floor((ww - frame.width * s) / 2), std::floor((wh - frame.height * s) / 2), std::floor(frame.width * s),
+                                std::floor(frame.height * s)};
+            SDL_SetRenderDrawColor(sdl_, 0, 0, 0, 255);
+            SDL_RenderClear(sdl_);
+            scene_draw(dst);
+            if (flip) SDL_RenderPresent(sdl_);
+            return;
+        }
         const bt::Image* image = &frame;
         if (filter == Filter::Smooth) {
             bt::scale2x(frame, x2_);
@@ -901,7 +919,7 @@ int main(int argc, char** argv) {
     std::filesystem::path data_path = kDefaultData;
     int wide_arg = -1, filter_arg = -1, level_arg = 0, ticks_arg = 0, width = bt::Renderer::kScreenWidth * 4, height = bt::Renderer::kScreenHeight * 4;
     std::string shot, input_spec, keys_spec, pack_arg, frame_png, parts_dir;
-    bool godmode = false, coverage = false, no_gpu = false, mute = false;
+    bool godmode = false, coverage = false, no_gpu = false, mute = false, legacy_hd = false;
     int effects_arg = -1;
     std::string enumerate_dir, metatiles_dir, poses_dir;
     for (int i = 1; i < argc; ++i) {
@@ -921,6 +939,7 @@ int main(int argc, char** argv) {
         else if (a == "--coverage") coverage = true;
         else if (a == "--no-gpu") no_gpu = true;
         else if (a == "--mute") mute = true;
+        else if (a == "--legacy-hd") legacy_hd = true;  // the pixel-based HD renderer instead of the scene renderer
         else if (a == "--effects") effects_arg = std::atoi(next), ++i;
         else if (a == "--enumerate") enumerate_dir = next, ++i;
         else if (a == "--metatiles") metatiles_dir = next, ++i;
@@ -999,10 +1018,24 @@ int main(int argc, char** argv) {
     // One frame of the picture: HD with the art pack when there is one and it
     // is on, otherwise the original 320x240. HD frames always use sharp scaling.
     auto lighting = std::make_unique<Lighting>(sdl, gpu);
+    // The scene renderer, when the pack has whole poses (tools/artpack.py export-poses).
+    std::unique_ptr<SceneRenderer> scene_renderer;
+    if (pack && !legacy_hd) {
+        scene_renderer = std::make_unique<SceneRenderer>(sdl, renderer, *pack);
+        if (!scene_renderer->usable()) scene_renderer.reset();
+    }
     if (!shot.empty()) lighting->fixed_dt = 1.0f / 35.0f;
     auto draw = [&](bt::Image& out) {
         display->effect = nullptr;
         display->sparks = nullptr;
+        display->scene_draw = nullptr;
+        if (pack && settings.hd && scene_renderer && scene_renderer->prepare(game->display())) {
+            out.resize(bt::Renderer::kScreenWidth + 2 * render_opt.extra, bt::Renderer::kScreenHeight);
+            const bt::Scene scene = game->display();
+            const int extra = render_opt.extra;
+            display->scene_draw = [&renderer_ref = *scene_renderer, scene, extra](const SDL_FRect& d) { renderer_ref.draw(scene, d, extra); };
+            return display->filter;
+        }
         if (pack && settings.hd) {
             hd.render_screen(game->display(), out, render_opt);
             if (settings.effects && lighting->prepare(hd, game->level_id(), out.width, out.height, hd.scale(), static_cast<double>(SDL_GetTicks()) / 1000.0))
@@ -1094,6 +1127,18 @@ int main(int argc, char** argv) {
             display->filter = keep;
             if (!keep_running) break;
         }
+        if (!frame_png.empty() && display->scene_draw) {  // the scene renderer: the window as drawn
+            if (SDL_Surface* s = SDL_RenderReadPixels(sdl, nullptr)) {
+                if (SDL_Surface* c = SDL_ConvertSurface(s, SDL_PIXELFORMAT_ARGB8888)) {
+                    frame.resize(c->w, c->h);
+                    for (int y = 0; y < c->h; ++y)
+                        std::copy_n(reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(c->pixels) + y * c->pitch), c->w,
+                                    frame.pixels.begin() + static_cast<std::ptrdiff_t>(y) * c->w);
+                    SDL_DestroySurface(c);
+                }
+                SDL_DestroySurface(s);
+            }
+        }
         if (!frame_png.empty()) bt::write_png(frame_png, frame);  // the frame before display scaling
         if (coverage && pack && settings.hd)  // where the last frame's pixels came from
             std::printf("coverage: %ld painted, %ld original (map %ld, sprites %ld, text %ld, hud %ld)\n", hd.coverage().painted,
@@ -1103,6 +1148,7 @@ int main(int argc, char** argv) {
         const bool ok = pixels && SDL_SaveBMP(pixels, shot.c_str());
         SDL_DestroySurface(pixels);
         display.reset();
+        scene_renderer.reset();
         lighting.reset();
         SDL_DestroyRenderer(sdl);
         if (gpu) SDL_DestroyGPUDevice(gpu);
@@ -1189,6 +1235,7 @@ int main(int argc, char** argv) {
     }
     if (pad) SDL_CloseGamepad(pad);
     display.reset();
+    scene_renderer.reset();
     lighting.reset();
     SDL_DestroyRenderer(sdl);
     if (gpu) SDL_DestroyGPUDevice(gpu);

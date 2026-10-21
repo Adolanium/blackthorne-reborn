@@ -61,8 +61,9 @@ if(WIN32)
     target_link_libraries(btaudio PUBLIC winmm)
 endif()
 
-add_executable(blackthorne WIN32 src/game/main.cpp)
+add_executable(blackthorne WIN32 src/game/main.cpp src/game/scene.cpp)
 target_link_libraries(blackthorne PRIVATE btrender btaudio SDL3::SDL3-static)
+target_include_directories(blackthorne PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 # The lighting shader (src/render/shaders), compiled to DXIL for Direct3D 12
 # with the Windows SDK's dxc. Without it the game runs without the effects.
