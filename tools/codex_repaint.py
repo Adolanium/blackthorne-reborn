@@ -74,6 +74,15 @@ Use your image generation tool to repaint in.png in that style, then save it as 
 Keep the layout exactly: every frame, border, slot and box at the same place and size, because the game draws icons and text into them. The flat black boxes and slots stay flat black. Keep the same motifs (bones, skulls, rope) and colour family. {extra}No text, no border around the image.
 
 When out.png is saved, reply with only the word DONE.""",
+    "poses": """in.png is a sheet of poses of Kyle Blackthorne, the hero of the 1994 platformer Blackthorne, upscaled from the original pixel art, each pose on a flat magenta (#ff00ff) background: standing, walking, running, aiming and firing his shotgun, climbing, jumping, hanging, hurt and dying. style.png is a sprite sheet already repainted in the target style.
+
+Use your image generation tool to repaint the whole sheet in that style, then save it as out.png in the current folder at exactly {w}x{h} pixels.
+
+{style}
+
+Kyle must look like the same man in every pose, faithful to the original art: a tall, muscular man with long straight jet-black hair falling past his shoulders, a stern tanned face with dark eyes and a strong jaw (no beard, no headband), a light grey sleeveless shirt, blue jeans worn through at the knees, black boots and a black belt, holding a pump-action shotgun (dark metal barrel, brown wooden grip). Keep his anatomy natural: arms attach at the shoulders with believable proportions, hands hold the shotgun firmly, the head sits on the neck without a seam. Keep every pose exactly where it is, at the same size and with the same silhouette and limb positions, because the game cuts each pose into pieces and animates them. Keep the magenta background flat magenta with clean edges. No text, no border.
+
+When out.png is saved, reply with only the word DONE.""",
     "cells": """in.png is a sheet of map cells from a 1994 side-scrolling platformer, upscaled from pixel art, each on a flat magenta (#ff00ff) background: the tiles the game swaps into a level while playing (opened doors and gates, bridges, switches, broken walls, menu text and similar), each 16x16 game pixels. style.png shows the approved style of the game's repainted levels.
 
 Use your image generation tool to repaint the whole sheet in that style, then save it as out.png in the current folder at exactly {w}x{h} pixels.
@@ -134,13 +143,18 @@ def shape_ok(src, out, kind):
     if not a.any():
         return True, 1.0
     iou = (a & b).sum() / max(1, (a | b).sum())
-    return iou >= (MIN_SHAPE if MIN_SHAPE is not None else 0.8 if kind in ("sprites", "hud", "font", "cells") else 0.6), iou
+    return iou >= (MIN_SHAPE if MIN_SHAPE is not None else 0.65 if kind == "poses" else 0.8 if kind in ("sprites", "hud", "font", "cells") else 0.6), iou
 
 
 def jobs_in(work, only):
     jobs = []
     for level in sorted(os.listdir(work)):
         if only and level.upper() not in only:
+            continue
+        if level == "poses":
+            base = os.path.join(work, level)
+            for name in sorted(os.listdir(os.path.join(base, "in"))):
+                jobs.append(("poses", base, name))
             continue
         if level == "cells":
             base = os.path.join(work, level)
@@ -200,7 +214,7 @@ def run_job(job, args):
     w, h = Image.open(src).size
     label = os.path.relpath(src, args.work)
     jobdir = os.path.join(args.work, "_jobs", label.replace(os.sep, "_").replace(".png", ""))
-    style_ref = os.path.join(args.style, {"fg": "fg.png", "bg": "bg.png", "sprites": "sprites.png", "hud": "fg.png", "font": "fg.png", "cells": "fg.png"}[kind])
+    style_ref = os.path.join(args.style, {"fg": "fg.png", "bg": "bg.png", "sprites": "sprites.png", "hud": "fg.png", "font": "fg.png", "cells": "fg.png", "poses": "sprites.png"}[kind])
     for attempt in range(1, args.tries + 1):
         shutil.rmtree(jobdir, ignore_errors=True)
         os.makedirs(jobdir)

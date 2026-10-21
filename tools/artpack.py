@@ -500,6 +500,86 @@ def cmd_stitch_cells(args):
     print(f"cells: {done}")
 
 
+# Kyle's poses ---------------------------------------------------------------
+
+POSE_CELL = 64  # game pixels per pose cell on a sheet (256 at 4x)
+
+
+def cmd_split_poses(args):
+    """Kyle's assembled poses (blackthorne --poses) on magenta sheets of
+    4x3 cells, for repainting him as whole figures."""
+    src = args.poses
+    rows = [line.rstrip("\n").split("\t") for line in open(os.path.join(src, "poses.tsv"))]
+    base = os.path.join(args.work, "poses")
+    os.makedirs(os.path.join(base, "in"), exist_ok=True)
+    os.makedirs(os.path.join(base, "out"), exist_ok=True)
+    cols, per = 4, 12
+    sheets = []
+    for first in range(0, len(rows), per):
+        batch = rows[first:first + per]
+        n_rows = (len(batch) + cols - 1) // cols
+        sheet = Image.new("RGB", (cols * POSE_CELL * SCALE, n_rows * POSE_CELL * SCALE), KEY)
+        cells = []
+        for i, (name, w, h, sig) in enumerate(batch):
+            w, h = int(w), int(h)
+            if w > POSE_CELL or h > POSE_CELL:
+                continue
+            cx = (i % cols) * POSE_CELL + (POSE_CELL - w) // 2
+            cy = (i // cols) * POSE_CELL + (POSE_CELL - h)  # standing on the cell's floor
+            img = Image.open(os.path.join(src, name + ".png")).convert("RGBA").resize((w * SCALE, h * SCALE), Image.NEAREST)
+            sheet.paste(img, (cx * SCALE, cy * SCALE), mask=img.getchannel("A"))
+            parts = []
+            for p in sig.strip(";").split(";"):
+                key, size, x, y, mirror = p.split(",")
+                parts.append({"key": key, "size": int(size), "x": int(x), "y": int(y), "mirror": mirror == "1"})
+            cells.append({"pose": name, "x": cx, "y": cy, "w": w, "h": h, "parts": parts})
+        sname = f"p_{first // per:03d}.png"
+        sheet.save(os.path.join(base, "in", sname))
+        sheets.append({"name": sname, "width": cols * POSE_CELL, "height": n_rows * POSE_CELL, "cells": cells})
+    with open(os.path.join(base, "manifest.json"), "w") as f:
+        json.dump({"scale": SCALE, "sheets": sheets}, f, indent=1)
+    print(f"{len(rows)} poses on {len(sheets)} sheets in {base}")
+
+
+def cmd_stitch_poses(args):
+    """Cuts the repainted poses back into Kyle's parts: each part's region
+    of its pose, turned back to how its data is stored, inside the part's
+    own outline; written over the pack's loose-part paintings. A part in
+    several poses takes its first."""
+    base = os.path.join(args.work, "poses")
+    with open(os.path.join(base, "manifest.json")) as f:
+        m = json.load(f)
+    out = os.path.join(args.pack, "sprites")
+    os.makedirs(out, exist_ok=True)
+    done = set()
+    for sheet in m["sheets"]:
+        path = os.path.join(base, "out", sheet["name"])
+        if not os.path.exists(path):
+            continue
+        rgb = defringe(np.asarray(Image.open(path).convert("RGB").resize((sheet["width"] * SCALE, sheet["height"] * SCALE), Image.LANCZOS),
+                                  dtype=np.float64))
+        for c in sheet["cells"]:
+            pal = os.path.join(args.poses, c["pose"] + ".pal")
+            for p in c["parts"]:
+                if p["key"] in done:
+                    continue
+                s = p["size"] * SCALE
+                x0, y0 = (c["x"] + p["x"]) * SCALE, (c["y"] + p["y"]) * SCALE
+                cell = rgb[y0:y0 + s, x0:x0 + s]
+                if cell.shape[0] != s or cell.shape[1] != s:
+                    continue
+                if p["mirror"]:
+                    cell = cell[:, ::-1]
+                part_png = os.path.join(args.export, "sprites", p["key"] + ".png")
+                if not os.path.exists(part_png):
+                    continue
+                alpha = np.rint(smooth_alpha(Image.open(part_png).convert("RGBA").getchannel("A"), (s, s))).astype(np.uint8)
+                Image.fromarray(np.dstack([np.rint(cell).clip(0, 255).astype(np.uint8), alpha]), "RGBA").save(os.path.join(out, p["key"] + ".png"))
+                shutil.copy(pal, os.path.join(out, p["key"] + ".pal"))
+                done.add(p["key"])
+    print(f"poses: {len(done)} parts of Kyle written to {out}")
+
+
 # Fonts ---------------------------------------------------------------------
 
 FONT_COLS = 16
@@ -819,6 +899,16 @@ def main():
     s.add_argument("work")
     s.add_argument("pack")
     s.set_defaults(func=cmd_stitch_cells)
+    s = sub.add_parser("split-poses")
+    s.add_argument("poses", help="the folder blackthorne --poses wrote")
+    s.add_argument("work")
+    s.set_defaults(func=cmd_split_poses)
+    s = sub.add_parser("stitch-poses")
+    s.add_argument("poses")
+    s.add_argument("export")
+    s.add_argument("work")
+    s.add_argument("pack")
+    s.set_defaults(func=cmd_stitch_poses)
     s = sub.add_parser("split-font")
     s.add_argument("export")
     s.add_argument("work")
