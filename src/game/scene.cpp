@@ -95,8 +95,8 @@ SceneRenderer::~SceneRenderer() {
 }
 
 void SceneRenderer::free_level() {
-    for (SDL_Texture* t : {bg_, fg_, front_}) if (t) SDL_DestroyTexture(t);
-    bg_ = fg_ = front_ = nullptr;
+    for (SDL_Texture* t : {bg_, fg_, front_, occluder_}) if (t) SDL_DestroyTexture(t);
+    bg_ = fg_ = front_ = occluder_ = nullptr;
     fg_img_ = nullptr;
     applied_.clear();
     where_.clear();
@@ -122,13 +122,27 @@ SDL_Texture* SceneRenderer::pose_texture(const std::string& name) {
     return t;
 }
 
-SDL_Texture* SceneRenderer::part_texture(const bt::Renderer::Part& part) {
+SDL_Texture* SceneRenderer::part_texture(const bt::Scene& scene, const bt::Renderer::Part& part) {
     const std::uint64_t key = bt::Renderer::part_key(part);
     auto it = parts_.find(key);
     if (it != parts_.end()) return it->second;
     const bt::ArtPack::Sprite* s = pack_.sprite(key, part.size);
     if (!s && pack_.alias(key)) s = pack_.sprite(pack_.alias(key), part.size);
     SDL_Texture* t = s ? texture(s->image) : nullptr;
+    if (!t) {
+        // No painting: the original pixels, smoothly scaled, so a character
+        // is never missing. Stored as the data is (drawing mirrors it).
+        bt::Image img;
+        img.resize(part.size, part.size);
+        bt::Renderer::Part plain = part;
+        plain.mirror = false;
+        for (int y = 0; y < part.size; ++y)
+            for (int x = 0; x < part.size; ++x) {
+                const int v = bt::Renderer::part_pixel(plain, x, y);
+                img.pixels[static_cast<std::size_t>(y) * part.size + x] = v < 0 ? 0u : pal(scene.machine->palette_at_load.data(), v);
+            }
+        t = texture(img);
+    }
     parts_[key] = t;
     return t;
 }
@@ -170,11 +184,11 @@ SDL_Texture* SceneRenderer::hud_texture(const std::string& name, int w, int h) {
     return t;
 }
 
-// The "in front" layer: the foreground painting where the original draws
-// tiles in front of the characters (tile bit 3), with a soft edge.
-void SceneRenderer::build_front(const bt::Scene& scene, const bt::Image& fg) {
+// The foreground painting where the original draws tiles of `pass` (8: in
+// front of the characters, tile bit 3; -1: all), with a soft edge.
+void SceneRenderer::build_masked(const bt::Scene& scene, const bt::Image& fg, int pass, bt::Image& out) {
     bt::Image front1;
-    base_.render_layer(scene, false, 8, front1);
+    base_.render_layer(scene, false, pass, front1);
     const int w1 = front1.width, h1 = front1.height, S = scale_;
     std::vector<float> m(static_cast<std::size_t>(w1) * h1);
     for (std::size_t i = 0; i < m.size(); ++i) m[i] = (front1.pixels[i] >> 24) ? 1.0f : 0.0f;
@@ -192,7 +206,7 @@ void SceneRenderer::build_front(const bt::Scene& scene, const bt::Image& fg) {
                 }
             b[static_cast<std::size_t>(y) * w1 + x] = s / static_cast<float>(n);
         }
-    front_img_.resize(fg.width, fg.height);
+    out.resize(fg.width, fg.height);
     for (int y = 0; y < fg.height; ++y) {
         const float fy = (static_cast<float>(y) + 0.5f) / static_cast<float>(S) - 0.5f;
         const int y0 = std::clamp(static_cast<int>(std::floor(fy)), 0, h1 - 1), y1 = std::min(y0 + 1, h1 - 1);
@@ -206,7 +220,7 @@ void SceneRenderer::build_front(const bt::Scene& scene, const bt::Image& fg) {
             const float a = std::clamp((v - 0.25f) * 2.0f, 0.0f, 1.0f);
             const std::uint32_t p = fg.pixels[static_cast<std::size_t>(y) * fg.width + x];
             const std::uint32_t na = static_cast<std::uint32_t>(static_cast<float>(p >> 24) * a);
-            front_img_.pixels[static_cast<std::size_t>(y) * fg.width + x] = (na << 24) | (p & 0xFFFFFFu);
+            out.pixels[static_cast<std::size_t>(y) * fg.width + x] = (na << 24) | (p & 0xFFFFFFu);
         }
     }
 }
@@ -222,9 +236,17 @@ bool SceneRenderer::prepare(const bt::Scene& scene) {
         if (!fg || (scene.has_background && !bg)) return false;  // still decoding
         fg_ = texture(*fg);
         if (bg) bg_ = texture(*bg);
-        build_front(scene, *fg);
-        front_ = texture(front_img_);
-        if (!fg_ || !front_) return false;
+        {
+            bt::Image masked;
+            build_masked(scene, *fg, 8, masked);
+            front_ = texture(masked);
+            // Characters the original draws behind the foreground (priority 0,
+            // e.g. on ladders) are hidden only where its tiles were solid; the
+            // painting may fill gaps the original left open.
+            build_masked(scene, *fg, -1, masked);
+            occluder_ = texture(masked);
+        }
+        if (!fg_ || !front_ || !occluder_) return false;
         fg_img_ = fg;
         // Where each metatile appears at load, and what the texture shows.
         const bt::Machine& m = *scene.machine;
@@ -273,6 +295,7 @@ void SceneRenderer::update_cells(const bt::Scene& scene) {
                 }
             const SDL_Rect r{x * cs, y * cs, cs, cs};
             SDL_UpdateTexture(fg_, &r, px.data(), cs * 4);
+            SDL_UpdateTexture(occluder_, &r, px.data(), cs * 4);
             std::fill(px.begin(), px.end(), 0u);
             SDL_UpdateTexture(front_, &r, px.data(), cs * 4);
         }
@@ -510,9 +533,7 @@ void SceneRenderer::draw(const bt::Scene& scene, const SDL_FRect& dst, int extra
         poses.push_back(std::move(pm));
     }
     std::vector<bt::Renderer::Part> loose;
-    auto actors = [&](int priority) {
-        for (const PoseMatch& pm : poses) {
-            if (pm.priority != priority) continue;
+    auto draw_pose = [&](const PoseMatch& pm) {
             const auto& idx = pose_index_[pm.name];
             const float cell = static_cast<float>(idx[4]);
             float left = pm.flip ? static_cast<float>(pm.x1 + idx[0]) - cell : static_cast<float>(pm.x0 - idx[0]);
@@ -526,24 +547,43 @@ void SceneRenderer::draw(const bt::Scene& scene, const SDL_FRect& dst, int extra
             }
             const auto [sx, sy] = world(left, top);
             draw_tex(pose_texture(pm.name), sx, sy, cell, cell, pm.flip);
-        }
-        bt::Renderer::parts(scene, priority, loose);  // in drawing order, like the original
-        for (const bt::Renderer::Part& part : loose) {
-            // Renderer::parts lists them in drawing order; skip the posed ones.
-            bool posed = false;
-            for (const PoseMatch& pm : poses)
-                for (const bt::Renderer::Part& q : pm.parts)
-                    if (q.data == part.data && q.x == part.x && q.y == part.y) posed = true;
-            if (posed) continue;
-            const auto [sx, sy] = world(static_cast<float>(part.x), static_cast<float>(part.y));
-            draw_tex(part_texture(part), sx, sy, static_cast<float>(part.size), static_cast<float>(part.size), part.mirror);
-        }
     };
-    actors(0);
+    auto actors = [&](int priority) {
+        // In the original's drawing order (later on top): a pose where its
+        // first part comes, other parts one by one. Slot order would put
+        // e.g. an enemy over Kyle on a ladder where the game shows Kyle.
+        bt::Renderer::parts(scene, priority, loose);
+        std::vector<bool> drawn(poses.size(), false);
+        for (const bt::Renderer::Part& part : loose) {
+            std::size_t owner = poses.size();
+            for (std::size_t i = 0; i < poses.size() && owner == poses.size(); ++i)
+                for (const bt::Renderer::Part& q : poses[i].parts)
+                    if (q.data == part.data && q.x == part.x && q.y == part.y) {
+                        owner = i;
+                        break;
+                    }
+            if (owner < poses.size()) {
+                if (!drawn[owner] && poses[owner].priority == priority) draw_pose(poses[owner]), drawn[owner] = true;
+                continue;
+            }
+            const auto [sx, sy] = world(static_cast<float>(part.x), static_cast<float>(part.y));
+            draw_tex(part_texture(scene, part), sx, sy, static_cast<float>(part.size), static_cast<float>(part.size), part.mirror);
+        }
+        for (std::size_t i = 0; i < poses.size(); ++i)
+            if (!drawn[i] && poses[i].priority == priority) draw_pose(poses[i]);
+    };
+    // The foreground painting, then characters behind it, then the
+    // foreground again where the original's tiles were solid.
     if (fg_) {
         SDL_GetTextureSize(fg_, &tw, &th);
         const auto [sx, sy] = world(0, 0);
         draw_tex(fg_, sx, sy, tw / S, th / S);
+    }
+    actors(0);
+    if (occluder_) {
+        SDL_GetTextureSize(occluder_, &tw, &th);
+        const auto [sx, sy] = world(0, 0);
+        draw_tex(occluder_, sx, sy, tw / S, th / S);
     }
     // The animated fire and water: the game's colour cycles over the painting.
     if (overlay_tex_) {

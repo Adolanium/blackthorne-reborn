@@ -83,11 +83,13 @@ private:
     };
     SDL_Texture* texture(const bt::Image& img);
     SDL_Texture* pose_texture(const std::string& name);
-    SDL_Texture* part_texture(const bt::Renderer::Part& part);
+    SDL_Texture* part_texture(const bt::Scene& scene, const bt::Renderer::Part& part);
     SDL_Texture* glyph_texture(int font, int index);
     SDL_Texture* hud_texture(const std::string& name, int w, int h);
     void free_level();
-    void build_front(const bt::Scene& scene, const bt::Image& fg);
+    // The foreground painting where the original draws tiles (pass 8: the
+    // "in front" tiles; -1: all), with a soft edge.
+    void build_masked(const bt::Scene& scene, const bt::Image& fg, int pass, bt::Image& out);
     void update_cells(const bt::Scene& scene);
     void draw_tex(SDL_Texture* t, float x, float y, float w, float h, bool flip = false);
 
@@ -98,13 +100,13 @@ private:
     int cell_ = 64, scale_ = 4;
 
     int level_ = -1;
-    SDL_Texture *bg_ = nullptr, *fg_ = nullptr, *front_ = nullptr, *overlay_tex_ = nullptr;
+    SDL_Texture *bg_ = nullptr, *fg_ = nullptr, *front_ = nullptr, *occluder_ = nullptr, *overlay_tex_ = nullptr;
     bt::Renderer::Layers layers_;
     bt::Image emission_, ui_, overlay_;
     int play_x_ = 0, play_w_ = 0;
     float view_xf_ = 0, view_yf_ = 0;
     const bt::Image* fg_img_ = nullptr;  // the level's foreground painting
-    bt::Image front_img_;
+
     std::vector<int> applied_;                    // the metatile each fg cell shows in the texture
     std::map<int, std::pair<int, int>> where_;    // metatile -> a cell showing it at load
 
