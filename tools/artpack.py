@@ -564,6 +564,39 @@ def cmd_split_poses(args):
     print(f"{count} new poses; {len(sheets)} sheets in {base}")
 
 
+def cmd_paint_specks(args):
+    """Sheets of tiny particle effects (blood, sparks) the model can't keep
+    the shapes of: each speck of the original drawn as a soft, round,
+    glowing droplet in its own colour, written as the sheet's painting."""
+    base = os.path.join(args.work, "poses")
+    for name in args.sheets.split(","):
+        src = np.asarray(Image.open(os.path.join(base, "in", name)).convert("RGB"), dtype=np.float64)
+        h, w = src.shape[:2]
+        speck = np.sqrt(((src - np.array(KEY, dtype=np.float64)) ** 2).sum(axis=2)) > 100
+        # one droplet per 4x4 block (a pixel of the original)
+        out = np.zeros((h, w, 3))
+        weight = np.zeros((h, w))
+        yy, xx = np.mgrid[-6:7, -6:7]
+        kernel = np.exp(-(xx ** 2 + yy ** 2) / (2 * 2.2 ** 2))
+        for y in range(0, h, SCALE):
+            for x in range(0, w, SCALE):
+                if not speck[y:y + SCALE, x:x + SCALE].any():
+                    continue
+                col = src[y:y + SCALE, x:x + SCALE][speck[y:y + SCALE, x:x + SCALE]].mean(axis=0)
+                cy, cx = y + SCALE // 2, x + SCALE // 2
+                y0, y1, x0, x1 = max(0, cy - 6), min(h, cy + 7), max(0, cx - 6), min(w, cx + 7)
+                k = kernel[y0 - cy + 6:y1 - cy + 6, x0 - cx + 6:x1 - cx + 6]
+                out[y0:y1, x0:x1] += col * k[:, :, None]
+                weight[y0:y1, x0:x1] += k
+        a = np.clip(weight * 1.3, 0, 1)
+        rgb = np.where(weight[:, :, None] > 0, out / np.maximum(weight, 1e-6)[:, :, None], 0)
+        # a brighter core
+        rgb = np.clip(rgb * (1 + 0.35 * np.clip(weight - 0.6, 0, 1))[:, :, None], 0, 255)
+        img = rgb * a[:, :, None] + np.array(KEY, dtype=np.float64) * (1 - a[:, :, None])
+        Image.fromarray(np.rint(img).astype(np.uint8), "RGB").save(os.path.join(base, "out", name))
+        print("painted", name)
+
+
 def cmd_export_poses(args):
     """Whole painted poses for the scene renderer: each pose's full sheet
     cell (64x64 game pixels at 4x) with the painting's own soft outline
@@ -577,7 +610,13 @@ def cmd_export_poses(args):
     out = os.path.join(args.pack, "poses")
     os.makedirs(out, exist_ok=True)
     index = {}
+    only = set(args.sheets.split(",")) if getattr(args, "sheets", None) else None
+    if only and os.path.exists(os.path.join(out, "poses.json")):
+        with open(os.path.join(out, "poses.json")) as f:
+            index = json.load(f)["poses"]  # add to the poses exported before
     for sheet in m["sheets"]:
+        if only and sheet["name"] not in only:
+            continue
         path = os.path.join(base, "out", sheet["name"])
         if not os.path.exists(path):
             continue
@@ -966,7 +1005,12 @@ def main():
     s = sub.add_parser("export-poses")
     s.add_argument("work")
     s.add_argument("pack")
+    s.add_argument("--sheets", help="only these sheets (comma separated), added to the poses exported before")
     s.set_defaults(func=cmd_export_poses)
+    s = sub.add_parser("paint-specks")
+    s.add_argument("work")
+    s.add_argument("sheets", help="comma separated sheet names")
+    s.set_defaults(func=cmd_paint_specks)
     s = sub.add_parser("stitch-poses")
     s.add_argument("poses")
     s.add_argument("export")
